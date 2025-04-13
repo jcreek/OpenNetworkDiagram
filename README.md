@@ -12,7 +12,7 @@
 ✅ **JSON-based network structure** (editable in UI or manually)  
 ✅ **Interactive network visualisation**  
 ✅ **Persistent storage of network configurations**  
-✅ **Lightweight Svelte + Express.js**
+✅ **Lightweight Svelte**
 
 Use it to **document your home lab, office network, or cloud infrastructure** with an easy-to-use web interface.
 
@@ -54,29 +54,16 @@ cd open-network-diagram
 ### **2️⃣ Install Dependencies**
 
 ```bash
-cd frontend
-npm install
-cd ../backend
-npm install
+pnpm install
 ```
 
 ### **3️⃣ Run in Development Mode**
 
-- **Frontend (Svelte)**
+```bash
+pnpm run dev
+```
 
-  ```bash
-  cd frontend
-  npm run dev
-  ```
-
-  - Runs at `http://localhost:5173`
-
-- **Backend (Express.js)**
-  ```bash
-  cd backend
-  node server.js
-  ```
-  - Runs at `http://localhost:3000`
+- Runs at `http://localhost:5173`
 
 ---
 
@@ -84,12 +71,8 @@ npm install
 
 ```
 open-network-diagram/
-│── backend/              # Express.js backend (handles JSON storage)
-│   ├── server.js         # Express API
-│   ├── package.json      # Backend dependencies
-│── frontend/             # Svelte frontend
 │   ├── src/              # Svelte components
-│   ├── package.json      # Frontend dependencies
+│   ├── package.json      # Dependencies
 │── Dockerfile            # Docker setup
 │── .github/workflows/    # CI/CD pipelines
 │── README.md             # Documentation
@@ -124,25 +107,25 @@ Define your network using **`network.json`**:
 
 ```json
 {
-  "machines": [
-    {
-      "machineName": "ProxRouter",
-      "ipAddress": "10.0.0.3",
-      "role": "Hypervisor",
-      "operatingSystem": "Proxmox",
-      "software": {
-        "vms": [
-          { "name": "OpnSense", "role": "Router", "ipAddress": "10.0.0.4" },
-          { "name": "PiVPN", "role": "VPN Server", "ipAddress": "10.0.0.5" }
-        ]
-      },
-      "hardware": {
-        "cpu": "Intel N100",
-        "ram": "8GB",
-        "networkPorts": 4
-      }
-    }
-  ]
+	"machines": [
+		{
+			"machineName": "ProxRouter",
+			"ipAddress": "10.0.0.3",
+			"role": "Hypervisor",
+			"operatingSystem": "Proxmox",
+			"software": {
+				"vms": [
+					{ "name": "OpnSense", "role": "Router", "ipAddress": "10.0.0.4" },
+					{ "name": "PiVPN", "role": "VPN Server", "ipAddress": "10.0.0.5" }
+				]
+			},
+			"hardware": {
+				"cpu": "Intel N100",
+				"ram": "8GB",
+				"networkPorts": 4
+			}
+		}
+	]
 }
 ```
 
