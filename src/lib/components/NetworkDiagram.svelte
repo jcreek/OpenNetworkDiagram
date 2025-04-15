@@ -100,10 +100,30 @@
 			const cableSpeed = Math.min(localSpeed, remoteSpeed);
 			const color = getLineColor(cableSpeed);
 
+			// Calculate the best sockets for the line to exit/enter
+			const localRect = info.element.getBoundingClientRect();
+			const remoteRect = remoteInfo.element.getBoundingClientRect();
+			const dx = remoteRect.left - localRect.left;
+			const dy = remoteRect.top - localRect.top;
+
+			let startSocket = 'right';
+			let endSocket = 'left';
+			if (Math.abs(dx) > Math.abs(dy)) {
+				// More horizontal distance
+				startSocket = dx > 0 ? 'right' : 'left';
+				endSocket = dx > 0 ? 'left' : 'right';
+			} else {
+				// More vertical distance
+				startSocket = dy > 0 ? 'bottom' : 'top';
+				endSocket = dy > 0 ? 'top' : 'bottom';
+			}
+
 			const line = new LeaderLine(info.element, remoteInfo.element, {
-				path: 'straight',
+				path: 'grid',
 				startPlug: 'behind',
 				endPlug: 'behind',
+				startSocket,
+				endSocket,
 				color,
 				size: 4,
 				middleLabel: LeaderLine.captionLabel({
