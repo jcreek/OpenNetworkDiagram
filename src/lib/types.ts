@@ -1,4 +1,10 @@
-interface Hardware {
+export interface Port {
+	portName: string;
+	speedGbps?: number; // default to 1 if not provided
+	connectedTo?: string; // e.g. "Router-LAN2"
+}
+
+export interface Hardware {
 	cpu: string;
 	ram: string;
 	networkPorts: number;
@@ -6,30 +12,32 @@ interface Hardware {
 	gpu?: string;
 }
 
-interface VM {
+export interface VM {
 	name: string;
 	role: string;
 	ipAddress: string;
 }
 
-interface Software {
+export interface Software {
 	vms: VM[];
 }
 
-interface Machine {
+export interface Machine {
 	machineName: string;
 	ipAddress: string;
 	role: string;
 	operatingSystem: string;
 	software: Software;
 	hardware: Hardware;
+	ports?: Port[];
 }
 
-interface NetworkDevice {
+export interface NetworkDevice {
 	name: string;
 	ipAddress: string;
 	type: string;
 	notes?: string;
+	ports?: Port[];
 }
 
 export interface NetworkData {
