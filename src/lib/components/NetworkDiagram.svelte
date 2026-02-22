@@ -3,7 +3,7 @@
 	import cytoscape from 'cytoscape';
 	import dagre from 'cytoscape-dagre';
 	import loadNetworkData from '../data/loadNetworkData';
-	import { transformNetworkDataToGraph } from '../graph/transformNetworkData';
+	import transformNetworkDataToGraph from '../graph/transformNetworkData';
 	import Modal from './Modal.svelte';
 	import type { NetworkData } from '../types';
 	import type {
@@ -1139,6 +1139,7 @@
 			<button
 				type="button"
 				class:active={cameraMode === 'readable'}
+				aria-pressed={cameraMode === 'readable'}
 				on:click={() => applyCameraMode('readable')}
 			>
 				Readable Fit
@@ -1146,11 +1147,12 @@
 			<button
 				type="button"
 				class:active={cameraMode === 'overview'}
+				aria-pressed={cameraMode === 'overview'}
 				on:click={() => applyCameraMode('overview')}
 			>
 				Overview
 			</button>
-			<button type="button" on:click={toggleEthernetLabels}>
+			<button type="button" aria-pressed={showEthernetLabels} on:click={toggleEthernetLabels}>
 				{showEthernetLabels ? 'Hide Ethernet Labels' : 'Show Ethernet Labels'}
 			</button>
 			<button

@@ -63,7 +63,7 @@ function edgeSpeed(a: number | undefined, b: number | undefined): number | undef
 	return undefined;
 }
 
-export function transformNetworkDataToGraph(data: NetworkData): GraphTransformResult {
+export default function transformNetworkDataToGraph(data: NetworkData): GraphTransformResult {
 	const nodes: GraphNodeElement[] = [];
 	const edges: GraphEdgeElement[] = [];
 	const warnings: string[] = [];
@@ -118,16 +118,16 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 				nodeHeight: 110,
 				details: {
 					type: 'machine',
-					name: machine.machineName,
-					ip: machine.ipAddress,
-					role: machine.role,
-					os: machine.operatingSystem,
-					cpu: machine.hardware.cpu,
-					ram: machine.hardware.ram,
-					gpu: machine.hardware.gpu,
-					ports: machinePortsList,
-					vmCount: machineVms.length,
-					vms: machineVms
+						name: machine.machineName,
+						ip: machine.ipAddress,
+						role: machine.role,
+						os: machine.operatingSystem,
+						cpu: machine.hardware?.cpu ?? 'Unknown',
+						ram: machine.hardware?.ram ?? 'Unknown',
+						gpu: machine.hardware?.gpu ?? undefined,
+						ports: machinePortsList,
+						vmCount: machineVms.length,
+						vms: machineVms
 				}
 			}
 		});
