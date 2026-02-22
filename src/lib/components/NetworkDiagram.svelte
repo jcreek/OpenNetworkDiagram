@@ -1110,7 +1110,12 @@
 			window.addEventListener('resize', resizeHandler);
 		};
 
-		void initialize();
+		void initialize().catch((error: unknown) => {
+			loadError =
+				error instanceof Error && error.message
+					? error.message
+					: 'Failed to initialize network diagram';
+		});
 
 		return () => {
 			if (resizeHandler) {
