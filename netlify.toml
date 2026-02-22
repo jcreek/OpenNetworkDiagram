@@ -1,0 +1,5 @@
+[build]
+	command = "pnpm run build:netlify"
+
+[build.environment]
+	DEPLOY_TARGET = "netlify"
