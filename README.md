@@ -9,9 +9,9 @@
 **Open Network Diagram** is an **open-source, self-hosted tool** for creating **interactive network and infrastructure diagrams** using a **declarative JSON format**.
 
 ✅ **Fully self-hostable via Docker**  
-✅ **JSON-based network structure** (editable in UI or manually)  
+✅ **JSON-based network structure** (editable in UI or manually)
 ✅ **Interactive network visualisation**  
-✅ **Persistent storage of network configurations**  
+✅ **Simple file-based configuration**  
 ✅ **Lightweight Svelte**
 
 Use it to **document your home lab, office network, or cloud infrastructure** with an easy-to-use web interface.
@@ -25,20 +25,20 @@ Use it to **document your home lab, office network, or cloud infrastructure** wi
 Pull and run the latest image:
 
 ```bash
-docker run -d -p 8080:3000 -v /path/to/data:/data jcreek23/open-network-diagram
+docker run -d -p 8080:3000 jcreek23/open-network-diagram
 ```
 
 - **`-p 8080:3000`** → Maps the app to `http://localhost:8080`
-- **`-v /path/to/data:/data`** → Mounts a folder for persistent `network.json` storage
 
 ### **2️⃣ Open the Web UI**
 
-Visit **`http://localhost:8080`** to view and edit your network diagram.
+Visit **`http://localhost:8080`** to view your network diagram.
 
 ### **3️⃣ Modify Your Network (JSON-Based)**
 
-- The app reads **`network.json`** from the **mounted `/data` directory**.
-- Use the **web UI** to edit and save network changes.
+- The app reads **`/data/network.json`** from static assets.
+- In this repo, the default file is **`static/data/network.json`**.
+- Update that file to change the diagram data.
 
 ---
 
@@ -91,7 +91,7 @@ docker build -t open-network-diagram .
 ### **Run Locally**
 
 ```bash
-docker run -p 8080:3000 -v /path/to/data:/data open-network-diagram
+docker run -p 8080:3000 open-network-diagram
 ```
 
 ### **CI/CD (GitHub Actions)**
