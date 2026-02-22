@@ -1,0 +1,13 @@
+.git
+.github
+.svelte-kit
+.vscode
+node_modules
+.pnpm-store
+.DS_Store
+Thumbs.db
+coverage
+dist
+.env
+.env.*
+data/network.json
