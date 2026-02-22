@@ -1,7 +1,12 @@
 export interface Port {
 	portName: string;
 	speedGbps?: number; // default to 1 if not provided
-	connectedTo?: string; // e.g. "Router-LAN2"
+	connectedTo?: ConnectedPortRef;
+}
+
+export interface ConnectedPortRef {
+	device: string;
+	port: string;
 }
 
 export interface Hardware {
