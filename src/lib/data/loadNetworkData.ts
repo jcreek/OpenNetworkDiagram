@@ -20,7 +20,15 @@ export default async function loadNetworkData(jsonPath: string): Promise<Network
 		throw new Error(`Failed to load ${jsonPath} (${response.status} ${response.statusText})`);
 	}
 
-	const rawData: unknown = await response.json();
+	let rawData: unknown;
+	try {
+		rawData = await response.json();
+	} catch (error) {
+		throw new Error(`Failed to parse JSON at ${jsonPath}`, {
+			cause: error
+		});
+	}
+
 	if (!isNetworkData(rawData)) {
 		throw new Error(`JSON at ${jsonPath} is not valid network data`);
 	}

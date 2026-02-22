@@ -2,9 +2,14 @@ import type { ConnectedPortRef, NetworkData, Port } from '../types';
 import type { GraphEdgeElement, GraphNodeElement, GraphTransformResult } from './types';
 
 interface EndpointOwner {
+	kind: 'machine' | 'device';
 	nodeId: string;
 	name: string;
 	ports: Map<string, Port>;
+}
+
+function toOwnerKey(kind: EndpointOwner['kind'], name: string): string {
+	return `${kind}:${name}`;
 }
 
 function toMachineNodeId(name: string): string {
@@ -58,7 +63,7 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 			vmCount: number;
 		}
 	> = {};
-	const ownersByName = new Map<string, EndpointOwner>();
+	const ownersByKey = new Map<string, EndpointOwner>();
 	const seenWarnings = new Set<string>();
 
 	const warn = (message: string) => {
@@ -69,13 +74,14 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 	};
 
 	const addOwner = (owner: EndpointOwner) => {
-		if (ownersByName.has(owner.name)) {
+		const ownerKey = toOwnerKey(owner.kind, owner.name);
+		if (ownersByKey.has(ownerKey)) {
 			warn(
-				`Duplicate node name "${owner.name}" found. First occurrence will be used for link resolution.`
+				`Duplicate ${owner.kind} name "${owner.name}" found. First occurrence will be used for link resolution.`
 			);
 			return;
 		}
-		ownersByName.set(owner.name, owner);
+		ownersByKey.set(ownerKey, owner);
 	};
 
 	let hostingEdgeCounter = 0;
@@ -163,6 +169,7 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 		}
 
 		addOwner({
+			kind: 'machine',
 			nodeId: machineNodeId,
 			name: machine.machineName,
 			ports: machinePorts
@@ -198,6 +205,7 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 		}
 
 		addOwner({
+			kind: 'device',
 			nodeId: deviceNodeId,
 			name: device.name,
 			ports: devicePortMap
@@ -207,12 +215,21 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 	const seenPhysicalConnections = new Set<string>();
 	let physicalEdgeCounter = 0;
 
-	for (const owner of ownersByName.values()) {
+	for (const owner of ownersByKey.values()) {
 		for (const port of owner.ports.values()) {
 			const connectedTo = parseConnectedTo(port.connectedTo);
 			if (!connectedTo) continue;
 
-			const targetOwner = ownersByName.get(connectedTo.device);
+			const machineTargetOwner = ownersByKey.get(toOwnerKey('machine', connectedTo.device));
+			const deviceTargetOwner = ownersByKey.get(toOwnerKey('device', connectedTo.device));
+			if (machineTargetOwner && deviceTargetOwner) {
+				warn(
+					`Link from "${owner.name}:${port.portName}" references ambiguous device "${connectedTo.device}" (matches both machine and device names).`
+				);
+				continue;
+			}
+
+			const targetOwner = machineTargetOwner ?? deviceTargetOwner;
 			if (!targetOwner) {
 				warn(
 					`Link from "${owner.name}:${port.portName}" references unknown device "${connectedTo.device}".`

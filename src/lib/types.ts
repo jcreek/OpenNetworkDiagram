@@ -1,12 +1,12 @@
+export interface ConnectedPortRef {
+	device: string;
+	port: string;
+}
+
 export interface Port {
 	portName: string;
 	speedGbps?: number; // default to 1 if not provided
 	connectedTo?: ConnectedPortRef;
-}
-
-export interface ConnectedPortRef {
-	device: string;
-	port: string;
 }
 
 export interface Hardware {
