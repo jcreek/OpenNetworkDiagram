@@ -57,7 +57,7 @@
 	}
 
 	.modal-container {
-		width: min(100%, 680px);
+		width: 100%;
 		max-height: 90vh;
 		display: flex;
 		flex-direction: column;

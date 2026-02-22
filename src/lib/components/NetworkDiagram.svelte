@@ -14,14 +14,14 @@
 		GraphTransformResult
 	} from '../graph/types';
 
-	cytoscape.use(dagre);
-
 	export let jsonPath = '/data/network.json';
 
 	type CameraMode = 'readable' | 'overview';
 	type Position = { x: number; y: number };
 
 	let container: HTMLDivElement;
+	let diagramStage: HTMLDivElement;
+	let tooltipElement: HTMLDivElement | null = null;
 	let cy: cytoscape.Core | null = null;
 	let warnings: string[] = [];
 	let selectedDetails: GraphNodeDetails | null = null;
@@ -46,6 +46,16 @@
 		y: 0
 	};
 
+	const tooltipOffset = {
+		x: 44,
+		y: -8
+	};
+	const fallbackTooltipSize = {
+		width: 260,
+		height: 32
+	};
+	const tooltipViewportPadding = 8;
+
 	function closeDetails() {
 		selectedDetails = null;
 		selectedNodeId = null;
@@ -56,6 +66,39 @@
 			return 'Not connected';
 		}
 		return `${connection.device}:${connection.port}`;
+	}
+
+	function getTooltipSize(): { width: number; height: number } {
+		if (tooltipElement) {
+			const rect = tooltipElement.getBoundingClientRect();
+			if (rect.width > 0 && rect.height > 0) {
+				return { width: rect.width, height: rect.height };
+			}
+		}
+
+		return fallbackTooltipSize;
+	}
+
+	function clampTooltipPosition(rawX: number, rawY: number): Position {
+		const stageRect = diagramStage.getBoundingClientRect();
+		const containerRect = container.getBoundingClientRect();
+		const { width: tooltipWidth, height: tooltipHeight } = getTooltipSize();
+
+		const rawViewportX = containerRect.left + rawX;
+		const rawViewportY = containerRect.top + rawY;
+
+		const minViewportX = stageRect.left + tooltipViewportPadding;
+		const maxViewportX = stageRect.right - tooltipWidth - tooltipViewportPadding;
+		const minViewportY = stageRect.top + tooltipViewportPadding;
+		const maxViewportY = stageRect.bottom - tooltipHeight - tooltipViewportPadding;
+
+		const clampedViewportX = Math.max(minViewportX, Math.min(rawViewportX, maxViewportX));
+		const clampedViewportY = Math.max(minViewportY, Math.min(rawViewportY, maxViewportY));
+
+		return {
+			x: clampedViewportX - stageRect.left + diagramStage.scrollLeft,
+			y: clampedViewportY - stageRect.top + diagramStage.scrollTop
+		};
 	}
 
 	function isHostCollapsed(hostId: string): boolean {
@@ -892,8 +935,10 @@
 
 	onMount(() => {
 		let resizeHandler: (() => void) | null = null;
+		let resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 		const initialize = async () => {
+			cytoscape.use(dagre);
 			cy = cytoscape({
 				container,
 				elements: [],
@@ -1022,11 +1067,15 @@
 				const node = event.target;
 				const renderedPosition = node.renderedPosition();
 				const data = node.data() as GraphNodeData;
+				const nextText = data.rawName ?? data.label;
+				const rawX = renderedPosition.x + tooltipOffset.x;
+				const rawY = renderedPosition.y + tooltipOffset.y;
+				const clampedPosition = clampTooltipPosition(rawX, rawY);
 				tooltip = {
 					visible: true,
-					text: data.rawName ?? data.label,
-					x: renderedPosition.x + 44,
-					y: renderedPosition.y - 8
+					text: nextText,
+					x: clampedPosition.x,
+					y: clampedPosition.y
 				};
 			});
 
@@ -1039,12 +1088,19 @@
 			});
 
 			resizeHandler = () => {
-				if (!cy) {
-					return;
+				if (resizeTimeoutId !== null) {
+					clearTimeout(resizeTimeoutId);
 				}
-				runAdaptiveLayout(cy, cameraMode);
-				applyPhysicalEdgeDeconfliction(cy);
-				applyEthernetLabelVisibility(cy, showEthernetLabels);
+
+				resizeTimeoutId = setTimeout(() => {
+					if (!cy) {
+						return;
+					}
+					runAdaptiveLayout(cy, cameraMode);
+					applyPhysicalEdgeDeconfliction(cy);
+					applyEthernetLabelVisibility(cy, showEthernetLabels);
+					resizeTimeoutId = null;
+				}, 100);
 			};
 			window.addEventListener('resize', resizeHandler);
 		};
@@ -1055,6 +1111,10 @@
 			if (resizeHandler) {
 				window.removeEventListener('resize', resizeHandler);
 			}
+			if (resizeTimeoutId !== null) {
+				clearTimeout(resizeTimeoutId);
+				resizeTimeoutId = null;
+			}
 			if (cy) {
 				cy.destroy();
 				cy = null;
@@ -1064,7 +1124,7 @@
 </script>
 
 <div class="diagram-shell">
-	<div class="diagram-stage">
+	<div class="diagram-stage" bind:this={diagramStage}>
 		<div class="diagram-canvas" bind:this={container}></div>
 
 		<div class="map-controls">
@@ -1112,7 +1172,7 @@
 		{/if}
 
 		{#if tooltip.visible}
-			<div class="tooltip" style={`left: ${tooltip.x}px; top: ${tooltip.y}px;`}>
+			<div class="tooltip" bind:this={tooltipElement} style={`left: ${tooltip.x}px; top: ${tooltip.y}px;`}>
 				{tooltip.text}
 			</div>
 		{/if}
