@@ -505,6 +505,9 @@
 			if (!details || details.type !== 'device') {
 				return false;
 			}
+			if (typeof details.deviceType !== 'string') {
+				return false;
+			}
 			return details.deviceType.toLowerCase().includes('switch');
 		};
 		const endpointSide = (angle: number): SwitchSide => {
@@ -938,7 +941,9 @@
 		let resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 		const initialize = async () => {
-			cytoscape.use(dagre);
+			if (!cytoscape('layout', 'dagre')) {
+				cytoscape.use(dagre);
+			}
 			cy = cytoscape({
 				container,
 				elements: [],

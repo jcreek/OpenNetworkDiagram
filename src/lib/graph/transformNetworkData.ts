@@ -25,7 +25,9 @@ function toVmNodeId(hostName: string, vmName: string): string {
 }
 
 function parseConnectedTo(connection: Port['connectedTo']): ConnectedPortRef | null {
-	if (!connection?.device || !connection?.port) return null;
+	if (!connection?.device || !connection?.port) {
+		return null;
+	}
 	return {
 		device: connection.device.trim(),
 		port: connection.port.trim()
@@ -38,7 +40,9 @@ function hasReciprocalLink(
 	expectedPortName: string
 ): boolean {
 	const reverse = parseConnectedTo(targetPort?.connectedTo);
-	if (!reverse) return false;
+	if (!reverse) {
+		return false;
+	}
 	return reverse.device === expectedDeviceName && reverse.port === expectedPortName;
 }
 
@@ -47,8 +51,16 @@ function connectionKey(a: string, b: string): string {
 }
 
 function edgeSpeed(a: number | undefined, b: number | undefined): number | undefined {
-	if (typeof a === 'number' && typeof b === 'number') return Math.min(a, b);
-	return typeof a === 'number' ? a : b;
+	if (typeof a === 'number' && typeof b === 'number') {
+		return Math.min(a, b);
+	}
+	if (typeof a === 'number') {
+		return a;
+	}
+	if (typeof b === 'number') {
+		return b;
+	}
+	return undefined;
 }
 
 export function transformNetworkDataToGraph(data: NetworkData): GraphTransformResult {
@@ -89,7 +101,8 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 	for (const machine of data.machines) {
 		const machineNodeId = toMachineNodeId(machine.machineName);
 		const machinePortsList = [...(machine.ports ?? [])];
-		const machineVms = machine.software.vms.map((vm) => ({
+		const sourceMachineVms = machine.software?.vms ?? [];
+		const machineVms = sourceMachineVms.map((vm) => ({
 			name: vm.name,
 			ip: vm.ipAddress,
 			role: vm.role
@@ -122,10 +135,10 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 		machineVmIndex[machineNodeId] = {
 			vmNodeIds: [],
 			hostingEdgeIds: [],
-			vmCount: machine.software.vms.length
+			vmCount: sourceMachineVms.length
 		};
 
-		for (const vm of machine.software.vms) {
+		for (const vm of sourceMachineVms) {
 			const vmNodeId = toVmNodeId(machine.machineName, vm.name);
 
 			nodes.push({
@@ -218,7 +231,9 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 	for (const owner of ownersByKey.values()) {
 		for (const port of owner.ports.values()) {
 			const connectedTo = parseConnectedTo(port.connectedTo);
-			if (!connectedTo) continue;
+			if (!connectedTo) {
+				continue;
+			}
 
 			const machineTargetOwner = ownersByKey.get(toOwnerKey('machine', connectedTo.device));
 			const deviceTargetOwner = ownersByKey.get(toOwnerKey('device', connectedTo.device));
@@ -248,7 +263,9 @@ export function transformNetworkDataToGraph(data: NetworkData): GraphTransformRe
 			const a = `${owner.nodeId}:${port.portName}`;
 			const b = `${targetOwner.nodeId}:${connectedTo.port}`;
 			const dedupeKey = connectionKey(a, b);
-			if (seenPhysicalConnections.has(dedupeKey)) continue;
+			if (seenPhysicalConnections.has(dedupeKey)) {
+				continue;
+			}
 			seenPhysicalConnections.add(dedupeKey);
 
 			const reciprocal = hasReciprocalLink(targetPort, owner.name, port.portName);
