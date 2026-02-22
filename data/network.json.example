@@ -1,0 +1,54 @@
+{
+	"machines": [
+		{
+			"machineName": "Example Host",
+			"ipAddress": "192.168.1.10",
+			"role": "Hypervisor",
+			"operatingSystem": "Linux",
+			"ports": [
+				{
+					"portName": "eth0",
+					"speedGbps": 1,
+					"connectedTo": {
+						"device": "Example Switch",
+						"port": "1"
+					}
+				}
+			],
+			"software": {
+				"vms": [
+					{
+						"name": "Example VM",
+						"role": "Service",
+						"ipAddress": "192.168.1.20"
+					}
+				]
+			},
+			"hardware": {
+				"cpu": "CPU model",
+				"ram": "16GB",
+				"networkPorts": 1,
+				"networkPortSpeedGbps": 1,
+				"gpu": "Optional GPU"
+			}
+		}
+	],
+	"devices": [
+		{
+			"name": "Example Switch",
+			"ipAddress": "192.168.1.2",
+			"type": "Network Switch",
+			"notes": "Optional notes",
+			"ports": [
+				{
+					"portName": "1",
+					"speedGbps": 1,
+					"connectedTo": {
+						"device": "Example Host",
+						"port": "eth0"
+					}
+				}
+			]
+		}
+	]
+}
