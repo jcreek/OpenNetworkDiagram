@@ -1,5 +1,11 @@
 # **Open Network Diagram**
 
+![Docker Pulls](https://img.shields.io/docker/pulls/jcreek23/open-network-diagram)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/docker.yml)
+![Netlify](https://img.shields.io/netlify/3128f05f-831b-412c-ada0-46bc3d6e61d5)
+
+
+
 **A declarative, self-hosted tool for visualising and managing home lab & network architecture diagrams.**
 
 ---
