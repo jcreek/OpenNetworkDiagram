@@ -4,7 +4,7 @@
 	import cytoscape from 'cytoscape';
 	import dagre from 'cytoscape-dagre';
 
-	import { listIconDefinitions } from '$lib/config/iconRegistry';
+	import { listIconDefinitions, resolveIconPath } from '$lib/config/iconRegistry';
 	import {
 		cloneNetworkData,
 		createEmptyDevice,
@@ -95,6 +95,7 @@
 	let mapControlsCollapsed = false;
 
 	const iconDefinitions = listIconDefinitions();
+	const iconResultLimit = 100;
 	let tooltip = {
 		visible: false,
 		text: '',
@@ -112,13 +113,22 @@
 	};
 	const tooltipViewportPadding = 8;
 
+	function normalizeIconSearchValue(value: string): string {
+		return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+	}
+
+	$: normalizedIconSearch = normalizeIconSearchValue(iconSearch);
+	$: iconSearchTokens = normalizedIconSearch.split(' ').filter(Boolean);
 	$: filteredIconDefinitions = iconDefinitions.filter((icon) => {
-		const needle = iconSearch.trim().toLowerCase();
-		if (!needle) {
+		if (iconSearchTokens.length === 0) {
 			return true;
 		}
-		return icon.label.toLowerCase().includes(needle) || icon.key.toLowerCase().includes(needle);
+		const searchable = normalizeIconSearchValue(`${icon.label} ${icon.key}`);
+		return (
+			iconSearchTokens.every((token) => searchable.includes(token))
+		);
 	});
+	$: visibleIconDefinitions = filteredIconDefinitions.slice(0, iconResultLimit);
 
 	$: selectedMachine =
 		selectedTarget?.type === 'machine' ? networkData.machines[selectedTarget.index] : null;
@@ -145,6 +155,22 @@
 		Object.keys(machineVmIndex)
 			.filter((hostId) => (machineVmIndex[hostId]?.vmCount ?? 0) > 0)
 			.every((hostId) => isHostCollapsed(hostId));
+	$: selectedTargetIconKey =
+		selectedTarget?.type === 'machine'
+			? selectedMachine?.iconKey ?? ''
+			: selectedTarget?.type === 'device'
+				? selectedDevice?.iconKey ?? ''
+				: selectedTarget?.type === 'vm'
+					? selectedVm?.iconKey ?? ''
+					: '';
+	$: selectedTargetIconPath = resolveIconPath(selectedTargetIconKey || undefined);
+	$: addModalIconKey =
+		addModalKind === 'machine'
+			? newMachineDraft.iconKey ?? ''
+			: addModalKind === 'device'
+				? newDeviceDraft.iconKey ?? ''
+				: '';
+	$: addModalIconPath = resolveIconPath(addModalIconKey || undefined);
 
 	function equalsIgnoreCase(a: string, b: string): boolean {
 		return a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0;
@@ -351,20 +377,20 @@
 
 		if (selectedTarget.type === 'machine') {
 			if (!networkData.machines[selectedTarget.index]) {
-				selectedTarget = null;
+				closeSelectedTargetModal();
 			}
 			return;
 		}
 
 		if (selectedTarget.type === 'device') {
 			if (!networkData.devices[selectedTarget.index]) {
-				selectedTarget = null;
+				closeSelectedTargetModal();
 			}
 			return;
 		}
 
 		if (!networkData.machines[selectedTarget.machineIndex]?.software.vms[selectedTarget.vmIndex]) {
-			selectedTarget = null;
+			closeSelectedTargetModal();
 		}
 	}
 
@@ -433,8 +459,8 @@
 					'background-image': 'data(iconUrl)',
 					'background-fit': 'contain',
 					'background-clip': 'none',
-					'background-width': '56%',
-					'background-height': '56%',
+					'background-width': 'auto',
+					'background-height': 'auto',
 					'background-position-y': '30%'
 				}
 			},
@@ -1014,6 +1040,56 @@
 		applyDraft(next, { autosave: options?.autosave ?? true });
 	}
 
+	function setSelectedTargetIconKey(nextKey: string) {
+		const normalized = nextKey.trim();
+		const target = selectedTarget;
+		if (!target) {
+			return;
+		}
+
+		if (target.type === 'machine') {
+			const index = target.index;
+			mutateDraft(
+				(draft) => {
+					draft.machines[index].iconKey = normalized || undefined;
+				},
+				{ autosave: true }
+			);
+			return;
+		}
+
+		if (target.type === 'device') {
+			const index = target.index;
+			mutateDraft(
+				(draft) => {
+					draft.devices[index].iconKey = normalized || undefined;
+				},
+				{ autosave: true }
+			);
+			return;
+		}
+
+		const machineIndex = target.machineIndex;
+		const vmIndex = target.vmIndex;
+		mutateDraft(
+			(draft) => {
+				draft.machines[machineIndex].software.vms[vmIndex].iconKey = normalized || undefined;
+			},
+			{ autosave: true }
+		);
+	}
+
+	function setAddModalIconKey(nextKey: string) {
+		const normalized = nextKey.trim();
+		if (addModalKind === 'machine') {
+			newMachineDraft.iconKey = normalized || undefined;
+			return;
+		}
+		if (addModalKind === 'device') {
+			newDeviceDraft.iconKey = normalized || undefined;
+		}
+	}
+
 	function nextUniqueName(base: string, existing: string[]): string {
 		const normalized = new Set(existing.map((name) => name.toLowerCase()));
 		if (!normalized.has(base.toLowerCase())) {
@@ -1195,7 +1271,7 @@
 			return;
 		}
 		applyDraft(deleteOwner(networkData, 'machine', machine.machineName));
-		selectedTarget = null;
+		closeSelectedTargetModal();
 		deleteTarget = null;
 	}
 
@@ -1205,7 +1281,7 @@
 			return;
 		}
 		applyDraft(deleteOwner(networkData, 'device', device.name));
-		selectedTarget = null;
+		closeSelectedTargetModal();
 		deleteTarget = null;
 	}
 
@@ -1213,7 +1289,7 @@
 		mutateDraft((draft) => {
 			draft.machines[machineIndex]?.software.vms.splice(vmIndex, 1);
 		});
-		selectedTarget = null;
+		closeSelectedTargetModal();
 		deleteTarget = null;
 	}
 
@@ -1248,7 +1324,7 @@
 			});
 			selectedTarget = { type: 'device', index: networkData.devices.length - 1 };
 		}
-		addModalKind = null;
+		closeAddEntityModal();
 	}
 
 	function onThemeToggleChange(event: Event) {
@@ -1265,6 +1341,20 @@
 
 	function toggleMapControls() {
 		mapControlsCollapsed = !mapControlsCollapsed;
+	}
+
+	function clearIconSearch() {
+		iconSearch = '';
+	}
+
+	function closeSelectedTargetModal() {
+		selectedTarget = null;
+		clearIconSearch();
+	}
+
+	function closeAddEntityModal() {
+		addModalKind = null;
+		clearIconSearch();
 	}
 
 	function saveStateLabel(): string {
@@ -1424,7 +1514,7 @@
 
 		cy.on('tap', (event) => {
 			if (event.target === cy) {
-				selectedTarget = null;
+				closeSelectedTargetModal();
 			}
 		});
 
@@ -1628,13 +1718,45 @@
 				: selectedVm?.name ?? 'Virtual Machine'
 	}
 	maxWidth="880px"
-	on:close={() => (selectedTarget = null)}
+	on:close={closeSelectedTargetModal}
 >
 	<div class="icon-search">
 		<label>
 			Icon Search
-			<input type="search" bind:value={iconSearch} placeholder="Filter icon keys..." />
+			<input
+				type="text"
+				bind:value={iconSearch}
+				placeholder="Search icons..."
+				autocomplete="off"
+			/>
 		</label>
+		{#if selectedTargetIconPath}
+			<div class="icon-preview-card">
+				<img src={selectedTargetIconPath} alt="Selected icon preview" loading="lazy" />
+				<code>{selectedTargetIconKey}</code>
+			</div>
+		{/if}
+		<p class="icon-results-meta">
+			Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
+			matching icons
+		</p>
+		<div class="icon-results-grid">
+			{#each visibleIconDefinitions as icon (icon.key)}
+				<button
+					type="button"
+					class="icon-result-option"
+					on:click={() => setSelectedTargetIconKey(icon.key)}
+					title={icon.key}
+				>
+					<img src={icon.path} alt={icon.label} loading="lazy" />
+					<span>{icon.label}</span>
+					<code>{icon.key}</code>
+				</button>
+			{/each}
+		</div>
+		{#if filteredIconDefinitions.length === 0}
+			<p class="icon-results-empty">No icons match your search.</p>
+		{/if}
 	</div>
 	{#if selectedTarget?.type === 'machine' && selectedMachine}
 		<div class="inline-actions">
@@ -1700,23 +1822,6 @@
 							},
 							{ autosave: true }
 						)}
-				/>
-			</label>
-			<label>
-				Icon
-				<input
-					type="text"
-					list="icon-options"
-					value={selectedMachine.iconKey ?? ''}
-					on:change={(event) =>
-						mutateDraft(
-							(draft) => {
-								const nextValue = (event.currentTarget as HTMLInputElement).value.trim();
-								draft.machines[selectedTarget.index].iconKey = nextValue || undefined;
-							},
-							{ autosave: true }
-						)}
-					placeholder="server"
 				/>
 			</label>
 		</section>
@@ -1829,7 +1934,6 @@
 						Icon
 						<input
 							type="text"
-							list="icon-options"
 							bind:value={vm.iconKey}
 							on:change={() => mutateDraft(() => undefined, { autosave: true })}
 						/>
@@ -2007,22 +2111,6 @@
 						)}
 				></textarea>
 			</label>
-			<label>
-				Icon
-				<input
-					type="text"
-					list="icon-options"
-					value={selectedDevice.iconKey ?? ''}
-					on:change={(event) =>
-						mutateDraft(
-							(draft) => {
-								const nextValue = (event.currentTarget as HTMLInputElement).value.trim();
-								draft.devices[selectedTarget.index].iconKey = nextValue || undefined;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
 		</section>
 
 			<section class="edit-section">
@@ -2179,24 +2267,6 @@
 						)}
 				/>
 			</label>
-			<label>
-				Icon
-				<input
-					type="text"
-					list="icon-options"
-					value={selectedVm.iconKey ?? ''}
-					on:change={(event) =>
-						mutateDraft(
-							(draft) => {
-								const nextValue = (event.currentTarget as HTMLInputElement).value.trim();
-								draft.machines[selectedTarget.machineIndex].software.vms[
-									selectedTarget.vmIndex
-								].iconKey = nextValue || undefined;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
 		</section>
 		<div class="modal-footer">
 			<button
@@ -2219,13 +2289,45 @@
 	isOpen={addModalKind !== null}
 	title={addModalKind === 'machine' ? 'Add Machine' : 'Add Device'}
 	maxWidth="760px"
-	on:close={() => (addModalKind = null)}
+	on:close={closeAddEntityModal}
 >
 	<div class="icon-search">
 		<label>
 			Icon Search
-			<input type="search" bind:value={iconSearch} placeholder="Filter icon keys..." />
+			<input
+				type="text"
+				bind:value={iconSearch}
+				placeholder="Search icons..."
+				autocomplete="off"
+			/>
 		</label>
+		{#if addModalIconPath}
+			<div class="icon-preview-card">
+				<img src={addModalIconPath} alt="Selected icon preview" loading="lazy" />
+				<code>{addModalIconKey}</code>
+			</div>
+		{/if}
+		<p class="icon-results-meta">
+			Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
+			matching icons
+		</p>
+		<div class="icon-results-grid">
+			{#each visibleIconDefinitions as icon (icon.key)}
+				<button
+					type="button"
+					class="icon-result-option"
+					on:click={() => setAddModalIconKey(icon.key)}
+					title={icon.key}
+				>
+					<img src={icon.path} alt={icon.label} loading="lazy" />
+					<span>{icon.label}</span>
+					<code>{icon.key}</code>
+				</button>
+			{/each}
+		</div>
+		{#if filteredIconDefinitions.length === 0}
+			<p class="icon-results-empty">No icons match your search.</p>
+		{/if}
 	</div>
 	{#if addModalKind === 'machine'}
 		<section class="edit-section">
@@ -2245,10 +2347,6 @@
 				Operating System
 				<input type="text" bind:value={newMachineDraft.operatingSystem} />
 			</label>
-			<label>
-				Icon
-				<input type="text" list="icon-options" bind:value={newMachineDraft.iconKey} />
-			</label>
 		</section>
 	{:else if addModalKind === 'device'}
 		<section class="edit-section">
@@ -2267,10 +2365,6 @@
 			<label>
 				Notes
 				<textarea bind:value={newDeviceDraft.notes}></textarea>
-			</label>
-			<label>
-				Icon
-				<input type="text" list="icon-options" bind:value={newDeviceDraft.iconKey} />
 			</label>
 		</section>
 	{/if}
@@ -2319,12 +2413,6 @@
 		<button type="button" on:click={exportPng}>Download PNG</button>
 	</div>
 </Modal>
-
-<datalist id="icon-options">
-	{#each filteredIconDefinitions as icon (icon.key)}
-		<option value={icon.key}>{icon.label}</option>
-	{/each}
-</datalist>
 
 <style>
 	.diagram-shell {
@@ -2699,6 +2787,8 @@
 
 	.icon-search {
 		margin-bottom: 0.7rem;
+		display: grid;
+		gap: 0.6rem;
 	}
 
 	.icon-search label {
@@ -2716,6 +2806,94 @@
 		background: var(--panel-bg);
 		color: var(--panel-contrast);
 		font-size: 0.86rem;
+	}
+
+	.icon-preview-card {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.5rem;
+		border: 1px solid var(--panel-border);
+		border-radius: 8px;
+		background: color-mix(in oklab, var(--panel-bg) 92%, black 8%);
+	}
+
+	.icon-preview-card img {
+		width: 28px;
+		height: 28px;
+		object-fit: contain;
+	}
+
+	.icon-preview-card code {
+		font-size: 0.74rem;
+		color: var(--muted-text);
+		word-break: break-all;
+	}
+
+	.icon-results-meta {
+		margin: 0;
+		font-size: 0.74rem;
+		font-weight: 600;
+		color: var(--muted-text);
+	}
+
+	.icon-results-empty {
+		margin: 0;
+		font-size: 0.74rem;
+		font-weight: 600;
+		color: var(--muted-text);
+	}
+
+	.icon-results-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+		gap: 0.45rem;
+		max-height: 280px;
+		overflow: auto;
+		padding-right: 0.25rem;
+	}
+
+	.icon-result-option {
+		display: grid;
+		grid-template-columns: 24px 1fr;
+		grid-template-areas:
+			'icon label'
+			'icon key';
+		align-items: center;
+		gap: 0.2rem 0.5rem;
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		padding: 0.4rem 0.45rem;
+		border-radius: 8px;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.icon-result-option:hover {
+		background: color-mix(in oklab, var(--panel-bg) 84%, #3b82f6 16%);
+	}
+
+	.icon-result-option img {
+		grid-area: icon;
+		width: 20px;
+		height: 20px;
+		object-fit: contain;
+	}
+
+	.icon-result-option span {
+		grid-area: label;
+		font-size: 0.75rem;
+		font-weight: 700;
+		line-height: 1.2;
+	}
+
+	.icon-result-option code {
+		grid-area: key;
+		font-size: 0.66rem;
+		color: var(--muted-text);
+		line-height: 1.2;
+		word-break: break-all;
 	}
 
 	@media (max-width: 900px) {
