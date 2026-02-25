@@ -13,6 +13,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  changed-files:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      readme: ${{ steps.filter.outputs.readme }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed files
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            readme:
+              - README.md
+
   release:
     runs-on: ubuntu-latest
     permissions:
@@ -38,7 +59,7 @@ jobs:
 
       - name: Create Git tag + GitHub release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v5.0.2
+        uses: cycjimmy/semantic-release-action@v5
         with:
           extra_plugins: |
             @semantic-release/commit-analyzer
@@ -89,3 +110,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  dockerhub-overview:
+    needs: changed-files
+    if: needs.changed-files.outputs.readme == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update Docker Hub repository overview
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE_NAME }}
+          short-description: ${{ github.event.repository.description }}
+          enable-url-completion: true
