@@ -134,7 +134,12 @@ export async function writeNetworkFile(data) {
 	} finally {
 		await fileHandle.close();
 	}
-	await rename(temporaryPath, source);
+	try {
+		await rename(temporaryPath, source);
+	} catch (renameError) {
+		await unlink(temporaryPath).catch(() => undefined);
+		throw renameError;
+	}
 
 	await trimBackups(backupDirectory, path.basename(source), 5);
 	const updatedAt = await readUpdatedAt(source);
