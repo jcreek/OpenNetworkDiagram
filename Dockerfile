@@ -26,6 +26,7 @@ RUN addgroup -S appuser && adduser -S -G appuser appuser
 
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/server.mjs ./server.mjs
+COPY --from=builder /app/src/lib/shared ./src/lib/shared
 COPY --from=builder /app/data ./data
 
 RUN chown -R appuser:appuser /app/build /app/server.mjs /app/data /app \
