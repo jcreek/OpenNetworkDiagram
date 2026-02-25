@@ -1,177 +1,146 @@
-# **Open Network Diagram**
+# Open Network Diagram
 
-![Docker Pulls](https://img.shields.io/docker/pulls/jcreek23/open-network-diagram)
-![Release Workflow](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/release.yml?branch=main&label=release)
-![Docker CI Workflow](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/docker.yml?label=docker%20ci)
-![Latest Release](https://img.shields.io/github/v/release/jcreek/OpenNetworkDiagram?display_name=tag&sort=semver)
-![Netlify](https://img.shields.io/netlify/3128f05f-831b-412c-ada0-46bc3d6e61d5)
+[![Docker Pulls](https://img.shields.io/docker/pulls/jcreek23/open-network-diagram)](https://hub.docker.com/r/jcreek23/open-network-diagram)
+[![Release Workflow](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/release.yml?branch=main&label=release)](https://github.com/jcreek/OpenNetworkDiagram/actions/workflows/release.yml)
+[![Docker CI Workflow](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/docker.yml?label=docker%20ci)](https://github.com/jcreek/OpenNetworkDiagram/actions/workflows/docker.yml)
+[![Latest Release](https://img.shields.io/github/v/release/jcreek/OpenNetworkDiagram?display_name=tag&sort=semver)](https://github.com/jcreek/OpenNetworkDiagram/releases)
+[![Netlify](https://img.shields.io/netlify/3128f05f-831b-412c-ada0-46bc3d6e61d5)](https://opennetworkdiagram.jcreek.co.uk)
 
-**A declarative, self-hosted tool for visualising and managing home lab & network architecture diagrams.**
+**A declarative, self-hosted containerised tool for visualising and managing home lab & network architecture diagrams.**
 
----
+Open Network Diagram helps you document your infrastructure in a visual UI while keeping a real JSON source of truth you can version, back up, and reuse.
 
-## **📝 About**
+- Homelab-friendly: run it in minutes with Docker.
+- Practical: edit in the UI and autosave to `network.json`.
+- Declarative: keep your topology in Git if you want.
 
-**Open Network Diagram** is an **open-source, self-hosted tool** for creating **interactive network and infrastructure diagrams** using a **declarative JSON format**.
+[Docker Hub](https://hub.docker.com/r/jcreek23/open-network-diagram) | [Live Demo (Read-Only)](https://opennetworkdiagram.jcreek.co.uk) | [GitHub Releases](https://github.com/jcreek/OpenNetworkDiagram/releases)
 
-✅ **Fully self-hostable via Docker**  
-✅ **Docker-first deployment target** (Netlify optional for demo hosting)
-✅ **Interactive network visualisation**  
-✅ **Single-page modal editor with live updates**  
-✅ **Debounced autosave to JSON (self-hosted)**  
-✅ **Local vendored icon catalog (offline runtime)**  
-✅ **Lightweight Svelte**
+![Open Network Diagram network view with ethernet labels](screenshot1.png)
 
-Use it to **document your home lab, office network, or cloud infrastructure** with an easy-to-use web interface.
+## Features
 
----
+- Network view with ethernet labels to make physical and logical links easy to read.
+- Non-network view for host-first inventory and service mapping.
+- Expandable VM lists per machine for quick virtualization visibility.
+- Modal editor for machines/devices with live diagram updates.
+- JSON-backed persistence with autosave in self-hosted mode.
+- Docker-first deployment with writable data volume support.
+- Optional read-only mode for public demos and safe sharing.
+- Local vendored icon catalog for offline-friendly runtime behavior.
 
-## **🚀 Quick Start (For Users)**
+## Why Home Lab Users Use It
 
-### **1️⃣ Create Your Runtime Data File**
+- Keep an always-up-to-date map of machines, VMs, and devices.
+- Edit quickly through a modal UI instead of hand-editing large diagrams.
+- Persist everything to JSON so backups and Git workflows stay simple.
+- Stay fully self-hosted with no runtime dependency on external APIs.
 
-Copy the template and edit your own network data:
+## 2-Minute Docker Quick Start
+
+This is the fastest way to run Open Network Diagram for a home lab.
+
+1. Create a local data folder and seed your first `network.json`:
 
 ```bash
-cp data/network.json.example data/network.json
+mkdir -p ond-data
+curl -fsSL https://raw.githubusercontent.com/jcreek/OpenNetworkDiagram/main/data/network.json.example -o ond-data/network.json
 ```
 
-### **2️⃣ Run Open Network Diagram via Docker**
-
-From this repo:
+2. Run the published Docker image:
 
 ```bash
-docker compose up --build
-```
-
-Or pull and run directly:
-
-```bash
-docker run -d -p 8080:3000 \
+docker run -d \
+  --name open-network-diagram \
+  --restart unless-stopped \
+  -p 8080:3000 \
   -e NETWORK_DATA_FILE=/app/data/network.json \
   -e NETWORK_BACKUP_DIR=/app/data/.backups \
-  -v "$(pwd)/data:/app/data" \
-  jcreek23/open-network-diagram
+  -v "$(pwd)/ond-data:/app/data" \
+  jcreek23/open-network-diagram:latest
 ```
 
-- **`-p 8080:3000`** → Maps the app to `http://localhost:8080`
-- **`-v .../data:/app/data`** → Uses your local writable `data/network.json`
+3. Open the app at `http://localhost:8080`.
 
-### **3️⃣ Open the Web UI**
+4. Edit your topology in the UI. Changes persist to `ond-data/network.json`.
 
-Visit **`http://localhost:8080`** to view your network diagram.
+Useful follow-up commands:
 
-### **4️⃣ Modify Your Network (Modal UI + JSON Persistence)**
+```bash
+docker logs -f open-network-diagram
+docker stop open-network-diagram
+docker rm open-network-diagram
+```
 
-- Edit machines/devices/VMs/ports directly in the modal UI.
-- Diagram updates immediately as you edit.
-- In self-hosted Docker/local mode, changes autosave to mounted **`data/network.json`**.
-- Netlify/demo is intentionally read-only; edits are in-memory only.
+## What It Looks Like
 
----
+| Network view with ethernet labels                                    | Non-network view with VMs expanded                                     | Modal editing a machine                              |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
+| ![Open Network Diagram network view with ethernet labels](screenshot1.png) | ![Open Network Diagram non-network view with VMs expanded](screenshot2.png) | ![Open Network Diagram modal editing a machine](screenshot3.png) |
 
-## **👩‍💻 Development Setup**
+## Docker Compose Option
 
-### **1️⃣ Clone the Repository**
+If you prefer compose:
+
+```yaml
+services:
+  open-network-diagram:
+    image: jcreek23/open-network-diagram:latest
+    ports:
+      - '8080:3000'
+    volumes:
+      - ./ond-data:/app/data
+    environment:
+      NETWORK_DATA_FILE: /app/data/network.json
+      NETWORK_BACKUP_DIR: /app/data/.backups
+    restart: unless-stopped
+```
+
+Start it with:
+
+```bash
+docker compose up -d
+```
+
+## For Developers
+
+### Local Development
 
 ```bash
 git clone https://github.com/jcreek/OpenNetworkDiagram.git
-cd open-network-diagram
-```
-
-### **2️⃣ Install Dependencies**
-
-```bash
+cd OpenNetworkDiagram
 pnpm install
-```
-
-### **3️⃣ Run in Development Mode**
-
-```bash
 pnpm run dev
 ```
 
-- Runs at `http://localhost:5173`
+App URL: `http://localhost:5173`
 
-### **4️⃣ Build Targets**
+### Build Targets
 
 ```bash
-pnpm run build          # default (Docker/static target)
-pnpm run build:docker   # explicit Docker/static target
+pnpm run build          # default build
+pnpm run build:docker   # Docker/static target
 pnpm run build:netlify  # Netlify target (read-only mode)
 pnpm run icons:manifest # regenerate local vendor icon manifest
 ```
 
----
+### Runtime and Persistence
 
-## **🛠️ Project Structure**
+- API endpoint: `GET/PUT /api/network-data`
+- Writes are enabled unless `NETWORK_READ_ONLY=true`
+- Writes are persisted atomically to the configured data file
+- Rolling backups are kept in the backup directory (last 5)
 
-```text
-open-network-diagram/
-├── src/                    # Svelte app source
-├── src/lib/config/vendorIconManifest.ts # Generated local icon catalog
-├── static/data/network.json # Demo dataset (Netlify/demo)
-├── static/icons/vendor/     # Vendored icon assets (runtime-local)
-├── data/network.json.example # User data template (Docker)
-├── third_party/             # Third-party license/provenance notes
-├── Dockerfile              # Docker build/runtime
-├── server.mjs              # Node runtime server (static + /api/network-data)
-├── docker-compose.yml      # Local Docker run with mounted data
-├── netlify.toml            # Netlify build config
-├── .github/workflows/      # CI workflows (PR build + automated release/publish)
-└── README.md               # Documentation
-```
+Environment variables:
 
----
+- `NETWORK_READ_ONLY` (default: `false`)
+  - Set to `true` to disable writes and force read-only mode.
+- `NETWORK_DATA_FILE` (default: `data/network.json`)
+  - JSON file path to read/write.
+- `NETWORK_BACKUP_DIR` (default: `data/.backups`)
+  - Directory for backup files.
 
-## **📦 Docker Build & Deployment**
-
-### **Build the Docker Image Locally**
-
-```bash
-docker build -t open-network-diagram .
-```
-
-### **Run Locally**
-
-```bash
-docker run --rm -p 8080:3000 \
-  -e NETWORK_DATA_FILE=/app/data/network.json \
-  -e NETWORK_BACKUP_DIR=/app/data/.backups \
-  -v "$(pwd)/data:/app/data" \
-  open-network-diagram
-```
-
-### **Write API Environment Variables**
-
-- **`NETWORK_READ_ONLY`** (default: `false`)  
-  Set to `true` to disable `PUT /api/network-data` and force read-only mode.
-- **`NETWORK_DATA_FILE`** (default: `data/network.json`)  
-  JSON file path to read/write.
-- **`NETWORK_BACKUP_DIR`** (default: sibling `.backups`)  
-  Backup directory for rolling save backups (last 5 retained).
-
-### **Local Icon Catalog (No Runtime Network Dependency)**
-
-- Icons are vendored locally under **`static/icons/vendor/homarr/`**.
-- The searchable catalog is generated into **`src/lib/config/vendorIconManifest.ts`**.
-- Third-party provenance and licensing are documented in:
-  - **`third_party/homarr-dashboard-icons/SOURCE.txt`**
-  - **`third_party/homarr-dashboard-icons/LICENSE`**
-  - **`third_party/homarr-dashboard-icons/NOTICE.txt`**
-- Runtime icon search/rendering does not call external APIs.
-
-### **CI/CD (GitHub Actions + Netlify)**
-
-- GitHub Actions workflow (`.github/workflows/docker.yml`) builds Docker on PRs (validation only).
-- GitHub Actions workflow (`.github/workflows/release.yml`) runs on `main`, creates semantic version tags/releases, and publishes Docker images to **Docker Hub** (`jcreek23/open-network-diagram`).
-- Netlify uses its own CI/CD pipeline with `netlify.toml` (`pnpm run build:netlify`).
-
----
-
-## **📝 JSON Network Configuration Example**
-
-Define your network using **`network.json`**:
+### JSON Example
 
 ```json
 {
@@ -195,27 +164,37 @@ Define your network using **`network.json`**:
 }
 ```
 
----
+### Project Structure
 
-## **🤝 Contributing**
+```text
+OpenNetworkDiagram/
+├── src/                               # Svelte app source
+├── src/lib/config/vendorIconManifest.ts # Generated local icon catalog
+├── static/data/network.json           # Demo dataset (Netlify)
+├── static/icons/vendor/               # Vendored icon assets (runtime-local)
+├── data/network.json.example          # Starter data template for Docker users
+├── third_party/                       # Third-party provenance + licensing
+├── Dockerfile                         # Docker build/runtime image
+├── server.mjs                         # Node runtime server (static + API)
+├── docker-compose.yml                 # Local compose example (build from repo)
+├── netlify.toml                       # Netlify build config
+└── .github/workflows/                 # CI workflows
+```
 
-We welcome contributions! To contribute:
+### CI/CD
 
-1. **Fork the repository**.
-2. **Create a feature branch** (`git checkout -b feature-name`).
-3. **Commit your changes** (`git commit -m "Add feature X"`).
-4. **Push to your fork** (`git push origin feature-name`).
-5. **Submit a Pull Request**.
+- `docker.yml`: validates Docker build on pull requests.
+- `release.yml`: semantic release on `main` and Docker Hub publish for tagged releases.
+- Docker Hub image: [`jcreek23/open-network-diagram`](https://hub.docker.com/r/jcreek23/open-network-diagram)
 
----
+## Contributing
 
-## **📜 License**
+1. Fork the repository.
+2. Create a feature branch.
+3. Commit your changes.
+4. Push your branch.
+5. Open a pull request.
 
-[GNU GPL v3 License](LICENSE) – Free to use, modify, and distribute, except distributing closed source versions.
+## License
 
----
-
-## **📬 Contact**
-
-**Author:** [Joshua Creek](https://github.com/jcreek)  
-**Project Repo:** [GitHub](https://github.com/jcreek/OpenNetworkDiagram)
+[GNU GPL v3](LICENSE)
