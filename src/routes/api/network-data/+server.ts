@@ -1,5 +1,4 @@
 import { json } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
 
 import { validateNetworkData } from '$lib/data/networkSchema';
 import {
@@ -8,6 +7,7 @@ import {
 	readNetworkFile,
 	writeNetworkFile
 } from '$lib/server/networkPersistence';
+import type { RequestHandler } from './$types';
 
 function serializeValidationErrors(errors: Array<{ path: string; message: string }>) {
 	return errors.map((issue) => ({
