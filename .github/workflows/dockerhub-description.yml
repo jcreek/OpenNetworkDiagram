@@ -1,0 +1,59 @@
+name: Docker Hub Description
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - README.md
+      - .github/workflows/dockerhub-description.yml
+
+jobs:
+  dockerhub-description:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preflight Docker Hub repository access
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+          DOCKERHUB_REPOSITORY: jcreek23/open-network-diagram
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_PASSWORD}" ]; then
+            echo "Missing DOCKERHUB_USERNAME or DOCKERHUB_PASSWORD secret."
+            exit 1
+          fi
+
+          LOGIN_RESPONSE="$(curl -fsS -X POST \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_PASSWORD}\"}" \
+            https://hub.docker.com/v2/users/login/)"
+
+          TOKEN="$(printf '%s' "${LOGIN_RESPONSE}" | ruby -rjson -e 'input = STDIN.read; data = JSON.parse(input); puts data.fetch("token", "")')"
+
+          if [ -z "${TOKEN}" ]; then
+            echo "Docker Hub login succeeded but token was missing."
+            exit 1
+          fi
+
+          curl -fsS \
+            -H "Authorization: JWT ${TOKEN}" \
+            "https://hub.docker.com/v2/repositories/${DOCKERHUB_REPOSITORY}/" >/dev/null
+
+          echo "Docker Hub preflight access check passed for ${DOCKERHUB_REPOSITORY}."
+
+      - name: Update Docker Hub repository overview
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          repository: jcreek23/open-network-diagram
+          readme-filepath: ./README.md
+          enable-url-completion: true
