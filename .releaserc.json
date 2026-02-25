@@ -38,7 +38,44 @@
 				]
 			}
 		],
-		"@semantic-release/release-notes-generator",
+		[
+			"@semantic-release/release-notes-generator",
+			{
+				"preset": "conventionalcommits",
+				"presetConfig": {
+					"types": [
+						{
+							"type": "build",
+							"section": "Build"
+						},
+						{
+							"type": "chore",
+							"section": "Chores"
+						},
+						{
+							"type": "ci",
+							"section": "CI"
+						},
+						{
+							"type": "docs",
+							"section": "Docs"
+						},
+						{
+							"type": "refactor",
+							"section": "Refactors"
+						},
+						{
+							"type": "style",
+							"section": "Style"
+						},
+						{
+							"type": "test",
+							"section": "Tests"
+						}
+					]
+				}
+			}
+		],
 		"@semantic-release/github"
 	]
 }

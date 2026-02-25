@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
     outputs:
       new_release_published: ${{ steps.semantic.outputs.new_release_published }}
       new_release_version: ${{ steps.semantic.outputs.new_release_version }}
@@ -36,10 +38,11 @@ jobs:
 
       - name: Create Git tag + GitHub release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v5.0.2
         with:
           extra_plugins: |
             @semantic-release/commit-analyzer
+            conventional-changelog-conventionalcommits
             @semantic-release/release-notes-generator
             @semantic-release/github
         env:
