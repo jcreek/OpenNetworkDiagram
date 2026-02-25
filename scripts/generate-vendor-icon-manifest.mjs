@@ -8,6 +8,7 @@ const projectRoot = path.resolve(currentDirPath, '..');
 
 const vendorRoot = path.join(projectRoot, 'static/icons/vendor/homarr');
 const outputPath = path.join(projectRoot, 'src/lib/config/vendorIconManifest.ts');
+const prettierIgnorePath = path.join(projectRoot, '.prettierignore');
 
 const allowedExtensions = new Set(['.svg', '.png', '.webp']);
 const extensionPriority = {
@@ -63,6 +64,33 @@ function compareIconRecords(a, b) {
     return labelCompare;
   }
   return a.key.localeCompare(b.key);
+}
+
+/** @param {string} filePath @param {string} entry */
+async function ensureIgnoreEntry(filePath, entry) {
+  const normalizedEntry = toPosixPath(entry).replace(/^\.?\//, '');
+  let contents = '';
+  try {
+    contents = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const eol = contents.includes('\r\n') ? '\r\n' : '\n';
+  const existingEntries = contents
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => toPosixPath(line).replace(/^\.?\//, ''));
+  if (existingEntries.includes(normalizedEntry)) {
+    return;
+  }
+
+  const suffix = contents.length > 0 && !contents.endsWith('\n') && !contents.endsWith('\r\n') ? eol : '';
+  const nextContents = `${contents}${suffix}${normalizedEntry}${eol}`;
+  await fs.writeFile(filePath, nextContents, 'utf8');
 }
 
 async function main() {
@@ -149,8 +177,10 @@ async function main() {
 
   const footer = ['];', ''].join('\n');
   const output = `${header}\n${body}\n${footer}`;
+  const outputIgnoreEntry = toPosixPath(path.relative(projectRoot, outputPath));
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await ensureIgnoreEntry(prettierIgnorePath, outputIgnoreEntry);
   await fs.writeFile(outputPath, output, 'utf8');
 
 }
