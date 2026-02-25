@@ -113,19 +113,30 @@ function ensureReciprocalConnections(data: NetworkData) {
 				continue;
 			}
 
-			const targetPort = findPort(targetOwner, port.connectedTo.port);
-			if (!targetPort) {
-				delete port.connectedTo;
-				continue;
-			}
+				const targetPort = findPort(targetOwner, port.connectedTo.port);
+				if (!targetPort) {
+					delete port.connectedTo;
+					continue;
+				}
 
-			targetPort.connectedTo = {
-				device: owner.name,
-				port: port.portName
-			};
+				const expectedReciprocal = {
+					device: owner.name,
+					port: port.portName
+				};
+				if (!targetPort.connectedTo) {
+					targetPort.connectedTo = expectedReciprocal;
+					continue;
+				}
+
+				const hasMatchingReciprocal =
+					equalsIgnoreCase(targetPort.connectedTo.device, owner.name) &&
+					equalsIgnoreCase(targetPort.connectedTo.port, port.portName);
+				if (hasMatchingReciprocal) {
+					continue;
+				}
+			}
 		}
 	}
-}
 
 function clearInboundReferences(data: NetworkData, predicate: (connection: Port['connectedTo']) => boolean) {
 	for (const owner of allOwners(data)) {
