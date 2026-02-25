@@ -16,6 +16,7 @@ const buildDir = path.resolve(currentDirPath, 'build');
 
 const HOST = process.env.HOST ?? '0.0.0.0';
 const PORT = Number(process.env.PORT ?? 3000);
+const MAX_BODY_BYTES = 1024 * 1024;
 
 const contentTypeByExtension = {
 	'.html': 'text/html; charset=utf-8',
@@ -31,12 +32,13 @@ const contentTypeByExtension = {
 	'.txt': 'text/plain; charset=utf-8'
 };
 
-function sendJson(response, status, payload) {
+function sendJson(response, status, payload, extraHeaders = {}) {
 	const body = JSON.stringify(payload);
 	response.writeHead(status, {
 		'Content-Type': 'application/json; charset=utf-8',
 		'Content-Length': Buffer.byteLength(body),
-		'Cache-Control': 'no-store'
+		'Cache-Control': 'no-store',
+		...extraHeaders
 	});
 	response.end(body);
 }
@@ -86,8 +88,23 @@ async function serveApi(request, response) {
 		}
 
 		let raw = '';
+		let accumulatedSize = 0;
 		for await (const chunk of request) {
-			raw += chunk;
+			const chunkSize = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
+			accumulatedSize += chunkSize;
+			if (accumulatedSize > MAX_BODY_BYTES) {
+				raw = '';
+				accumulatedSize = 0;
+				sendJson(
+					response,
+					413,
+					{ error: `Payload too large. Max body size is ${MAX_BODY_BYTES} bytes.` },
+					{ Connection: 'close' }
+				);
+				request.destroy();
+				return;
+			}
+			raw += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
 		}
 
 		let parsed;
@@ -177,12 +194,27 @@ async function serveStatic(requestPath, response) {
 }
 
 const server = createServer(async (request, response) => {
-	const requestUrl = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-	if (requestUrl.pathname === '/api/network-data') {
-		await serveApi(request, response);
-		return;
+	try {
+		const requestUrl = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+		if (requestUrl.pathname === '/api/network-data') {
+			await serveApi(request, response);
+			return;
+		}
+		await serveStatic(requestUrl.pathname, response);
+	} catch (error) {
+		// eslint-disable-next-line no-console
+		console.error('[OpenNetworkDiagram] request handling failed', error);
+		if (response.headersSent || response.writableEnded) {
+			response.destroy();
+			return;
+		}
+		const body = JSON.stringify({ error: 'Internal server error' });
+		response.statusCode = 500;
+		response.setHeader('Content-Type', 'application/json; charset=utf-8');
+		response.setHeader('Content-Length', Buffer.byteLength(body));
+		response.setHeader('Cache-Control', 'no-store');
+		response.end(body);
 	}
-	await serveStatic(requestUrl.pathname, response);
 });
 
 server.listen(PORT, HOST, () => {
