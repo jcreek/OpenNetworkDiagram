@@ -5,7 +5,10 @@ services:
       dockerfile: Dockerfile
     image: open-network-diagram:local
     ports:
-      - "8080:80"
+      - "8080:3000"
     volumes:
-      - ./data:/usr/share/nginx/html/data:ro
+      - ./data:/app/data
+    environment:
+      NETWORK_DATA_FILE: "/app/data/network.json"
+      NETWORK_BACKUP_DIR: "/app/data/.backups"
     restart: unless-stopped

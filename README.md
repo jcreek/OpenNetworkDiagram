@@ -4,8 +4,6 @@
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/docker.yml)
 ![Netlify](https://img.shields.io/netlify/3128f05f-831b-412c-ada0-46bc3d6e61d5)
 
-
-
 **A declarative, self-hosted tool for visualising and managing home lab & network architecture diagrams.**
 
 ---
@@ -17,7 +15,8 @@
 ✅ **Fully self-hostable via Docker**  
 ✅ **Docker-first deployment target** (Netlify optional for demo hosting)
 ✅ **Interactive network visualisation**  
-✅ **Simple file-based configuration**  
+✅ **Single-page modal editor with live updates**  
+✅ **Debounced autosave to JSON (self-hosted)**  
 ✅ **Lightweight Svelte**
 
 Use it to **document your home lab, office network, or cloud infrastructure** with an easy-to-use web interface.
@@ -45,22 +44,26 @@ docker compose up --build
 Or pull and run directly:
 
 ```bash
-docker run -d -p 8080:80 -v "$(pwd)/data:/usr/share/nginx/html/data:ro" jcreek23/open-network-diagram
+docker run -d -p 8080:3000 \
+  -e NETWORK_DATA_FILE=/app/data/network.json \
+  -e NETWORK_BACKUP_DIR=/app/data/.backups \
+  -v "$(pwd)/data:/app/data" \
+  jcreek23/open-network-diagram
 ```
 
-- **`-p 8080:80`** → Maps the app to `http://localhost:8080`
-- **`-v .../data:/usr/share/nginx/html/data:ro`** → Uses your local `data/network.json`
+- **`-p 8080:3000`** → Maps the app to `http://localhost:8080`
+- **`-v .../data:/app/data`** → Uses your local writable `data/network.json`
 
 ### **3️⃣ Open the Web UI**
 
 Visit **`http://localhost:8080`** to view your network diagram.
 
-### **4️⃣ Modify Your Network (JSON-Based)**
+### **4️⃣ Modify Your Network (Modal UI + JSON Persistence)**
 
-- Docker runtime reads **`/data/network.json`** from the mounted volume.
-- In this repo, your editable file is **`data/network.json`** (gitignored).
-- Netlify demo builds use committed sample data at **`static/data/network.json`**.
-- After editing JSON, click **Reload Default JSON** in the UI.
+- Edit machines/devices/VMs/ports directly in the modal UI.
+- Diagram updates immediately as you edit.
+- In self-hosted Docker/local mode, changes autosave to mounted **`data/network.json`**.
+- Netlify/demo is intentionally read-only; edits are in-memory only.
 
 ---
 
@@ -92,7 +95,7 @@ pnpm run dev
 ```bash
 pnpm run build          # default (Docker/static target)
 pnpm run build:docker   # explicit Docker/static target
-pnpm run build:netlify  # explicit Netlify target
+pnpm run build:netlify  # Netlify target (read-only mode)
 ```
 
 ---
@@ -105,6 +108,7 @@ open-network-diagram/
 ├── static/data/network.json # Demo dataset (Netlify/demo)
 ├── data/network.json.example # User data template (Docker)
 ├── Dockerfile              # Docker build/runtime
+├── server.mjs              # Node runtime server (static + /api/network-data)
 ├── docker-compose.yml      # Local Docker run with mounted data
 ├── netlify.toml            # Netlify build config
 ├── .github/workflows/      # CI workflows (Docker image build/push)
@@ -124,8 +128,21 @@ docker build -t open-network-diagram .
 ### **Run Locally**
 
 ```bash
-docker run --rm -p 8080:80 -v "$(pwd)/data:/usr/share/nginx/html/data:ro" open-network-diagram
+docker run --rm -p 8080:3000 \
+  -e NETWORK_DATA_FILE=/app/data/network.json \
+  -e NETWORK_BACKUP_DIR=/app/data/.backups \
+  -v "$(pwd)/data:/app/data" \
+  open-network-diagram
 ```
+
+### **Write API Environment Variables**
+
+- **`NETWORK_READ_ONLY`** (default: `false`)  
+  Set to `true` to disable `PUT /api/network-data` and force read-only mode.
+- **`NETWORK_DATA_FILE`** (default: `data/network.json`)  
+  JSON file path to read/write.
+- **`NETWORK_BACKUP_DIR`** (default: sibling `.backups`)  
+  Backup directory for rolling save backups (last 5 retained).
 
 ### **CI/CD (GitHub Actions + Netlify)**
 
@@ -160,16 +177,6 @@ Define your network using **`network.json`**:
 	"devices": [{ "name": "Switch", "ipAddress": "10.0.0.2", "type": "Nintendo Switch" }]
 }
 ```
-
----
-
-## **🔜 Roadmap**
-
-✅ **Initial version with JSON-based diagrams**  
-⏳ **Drag-and-drop editing in the UI**  
-⏳ **Custom icons for different devices**  
-⏳ **Export diagrams as PNG/SVG/Graphviz**  
-⏳ **Dark mode & UI themes**
 
 ---
 

@@ -15,24 +15,20 @@ COPY . .
 ENV DEPLOY_TARGET=docker
 RUN pnpm run build:docker
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner
+FROM node:20-alpine AS runner
 
-USER root
+WORKDIR /app
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=3000
 
-RUN apk add --no-cache libcap && \
-	setcap 'cap_net_bind_service=+ep' /usr/sbin/nginx
+COPY --from=builder /app/build ./build
+COPY --from=builder /app/server.mjs ./server.mjs
+COPY --from=builder /app/data ./data
 
-COPY nginx/default.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /app/build /usr/share/nginx/html
-
-RUN mkdir -p /usr/share/nginx/html/data && \
-	chown -R 101:101 /usr/share/nginx/html /var/cache/nginx /var/run /etc/nginx/conf.d
-
-USER 101
-
-EXPOSE 80
+EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-	CMD wget -qO- http://127.0.0.1/ > /dev/null || exit 1
+	CMD wget -qO- http://127.0.0.1:3000/ > /dev/null || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "server.mjs"]
