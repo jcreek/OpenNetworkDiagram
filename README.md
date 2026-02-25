@@ -1,10 +1,10 @@
 # **Open Network Diagram**
 
 ![Docker Pulls](https://img.shields.io/docker/pulls/jcreek23/open-network-diagram)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/docker.yml)
+![Release Workflow](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/release.yml?branch=main&label=release)
+![Docker CI Workflow](https://img.shields.io/github/actions/workflow/status/jcreek/OpenNetworkDiagram/docker.yml?label=docker%20ci)
+![Latest Release](https://img.shields.io/github/v/release/jcreek/OpenNetworkDiagram?display_name=tag&sort=semver)
 ![Netlify](https://img.shields.io/netlify/3128f05f-831b-412c-ada0-46bc3d6e61d5)
-
-
 
 **A declarative, self-hosted tool for visualising and managing home lab & network architecture diagrams.**
 
@@ -107,7 +107,7 @@ open-network-diagram/
 ├── Dockerfile              # Docker build/runtime
 ├── docker-compose.yml      # Local Docker run with mounted data
 ├── netlify.toml            # Netlify build config
-├── .github/workflows/      # CI workflows (Docker image build/push)
+├── .github/workflows/      # CI workflows (PR build + automated release/publish)
 └── README.md               # Documentation
 ```
 
@@ -129,8 +129,8 @@ docker run --rm -p 8080:80 -v "$(pwd)/data:/usr/share/nginx/html/data:ro" open-n
 
 ### **CI/CD (GitHub Actions + Netlify)**
 
-- GitHub Actions workflow (`.github/workflows/docker.yml`) builds Docker on PRs.
-- Pushes to `main` publish Docker images to **Docker Hub** (`jcreek23/open-network-diagram`).
+- GitHub Actions workflow (`.github/workflows/docker.yml`) builds Docker on PRs (validation only).
+- GitHub Actions workflow (`.github/workflows/release.yml`) runs on `main`, creates semantic version tags/releases, and publishes Docker images to **Docker Hub** (`jcreek23/open-network-diagram`).
 - Netlify uses its own CI/CD pipeline with `netlify.toml` (`pnpm run build:netlify`).
 
 ---
