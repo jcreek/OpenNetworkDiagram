@@ -363,27 +363,31 @@ export function validateNetworkData(value) {
 	}
 
 	const machines = [];
+	const machineEntries = [];
 	for (const [machineIndex, machineValue] of (Array.isArray(machinesRaw) ? machinesRaw : []).entries()) {
 		const machine = normalizeMachine(issues, `$.machines[${machineIndex}]`, machineValue);
 		if (machine) {
 			machines.push(machine);
+			machineEntries.push({ machine, originalIndex: machineIndex });
 		}
 	}
 
 	const devices = [];
+	const deviceEntries = [];
 	for (const [deviceIndex, deviceValue] of (Array.isArray(devicesRaw) ? devicesRaw : []).entries()) {
 		const device = normalizeDevice(issues, `$.devices[${deviceIndex}]`, deviceValue);
 		if (device) {
 			devices.push(device);
+			deviceEntries.push({ device, originalIndex: deviceIndex });
 		}
 	}
 
 	const seenMachineNames = new Set();
-	for (const [index, machine] of machines.entries()) {
+	for (const { machine, originalIndex } of machineEntries) {
 		const key = machine.machineName.toLowerCase();
 		if (seenMachineNames.has(key)) {
 			issues.push({
-				path: `$.machines[${index}].machineName`,
+				path: `$.machines[${originalIndex}].machineName`,
 				message: `duplicate machine name "${machine.machineName}"`
 			});
 		}
@@ -391,21 +395,21 @@ export function validateNetworkData(value) {
 	}
 
 	const seenDeviceNames = new Set();
-	for (const [index, device] of devices.entries()) {
+	for (const { device, originalIndex } of deviceEntries) {
 		const key = device.name.toLowerCase();
 		if (seenDeviceNames.has(key)) {
 			issues.push({
-				path: `$.devices[${index}].name`,
+				path: `$.devices[${originalIndex}].name`,
 				message: `duplicate device name "${device.name}"`
 			});
 		}
 		seenDeviceNames.add(key);
 	}
 
-	for (const [index, machine] of machines.entries()) {
+	for (const { machine, originalIndex } of machineEntries) {
 		if (seenDeviceNames.has(machine.machineName.toLowerCase())) {
 			issues.push({
-				path: `$.machines[${index}].machineName`,
+				path: `$.machines[${originalIndex}].machineName`,
 				message: `name "${machine.machineName}" collides with a device name`
 			});
 		}
