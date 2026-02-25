@@ -43,6 +43,10 @@ export default tseslint.config(
 		},
 		settings: {
 			'import/resolver': {
+				typescript: {
+					alwaysTryTypes: true,
+					project: ['./tsconfig.json']
+				},
 				node: {
 					extensions: ['.js', '.mjs', '.cjs', '.ts', '.d.ts', '.svelte', '.json']
 				}
@@ -57,17 +61,10 @@ export default tseslint.config(
 			'no-inner-declarations': 'off',
 			'no-unused-vars': 'off',
 			'import/no-extraneous-dependencies': 'off',
+			'import/no-unresolved': 'error',
+			'import/prefer-default-export': 'off',
 			'@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-			'import/extensions': [
-				'error',
-				'ignorePackages',
-				{
-					js: 'never',
-					mjs: 'never',
-					cjs: 'never',
-					ts: 'never'
-				}
-			]
+			'import/extensions': 'off'
 		}
 	},
 	{

@@ -20,6 +20,7 @@ Thumbs.db
 
 # User-provided Docker data
 data/network.json
+data/.backups
 
 # Vite
 vite.config.js.timestamp-*

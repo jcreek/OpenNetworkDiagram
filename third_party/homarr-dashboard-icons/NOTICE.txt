@@ -1,0 +1,3 @@
+This project vendors icon assets from homarr-labs/dashboard-icons.
+These assets are included locally to avoid runtime dependency on external icon sources.
+See SOURCE.txt for upstream commit details and LICENSE for license terms.

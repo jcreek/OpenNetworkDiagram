@@ -17,7 +17,9 @@
 ✅ **Fully self-hostable via Docker**  
 ✅ **Docker-first deployment target** (Netlify optional for demo hosting)
 ✅ **Interactive network visualisation**  
-✅ **Simple file-based configuration**  
+✅ **Single-page modal editor with live updates**  
+✅ **Debounced autosave to JSON (self-hosted)**  
+✅ **Local vendored icon catalog (offline runtime)**  
 ✅ **Lightweight Svelte**
 
 Use it to **document your home lab, office network, or cloud infrastructure** with an easy-to-use web interface.
@@ -45,22 +47,26 @@ docker compose up --build
 Or pull and run directly:
 
 ```bash
-docker run -d -p 8080:80 -v "$(pwd)/data:/usr/share/nginx/html/data:ro" jcreek23/open-network-diagram
+docker run -d -p 8080:3000 \
+  -e NETWORK_DATA_FILE=/app/data/network.json \
+  -e NETWORK_BACKUP_DIR=/app/data/.backups \
+  -v "$(pwd)/data:/app/data" \
+  jcreek23/open-network-diagram
 ```
 
-- **`-p 8080:80`** → Maps the app to `http://localhost:8080`
-- **`-v .../data:/usr/share/nginx/html/data:ro`** → Uses your local `data/network.json`
+- **`-p 8080:3000`** → Maps the app to `http://localhost:8080`
+- **`-v .../data:/app/data`** → Uses your local writable `data/network.json`
 
 ### **3️⃣ Open the Web UI**
 
 Visit **`http://localhost:8080`** to view your network diagram.
 
-### **4️⃣ Modify Your Network (JSON-Based)**
+### **4️⃣ Modify Your Network (Modal UI + JSON Persistence)**
 
-- Docker runtime reads **`/data/network.json`** from the mounted volume.
-- In this repo, your editable file is **`data/network.json`** (gitignored).
-- Netlify demo builds use committed sample data at **`static/data/network.json`**.
-- After editing JSON, click **Reload Default JSON** in the UI.
+- Edit machines/devices/VMs/ports directly in the modal UI.
+- Diagram updates immediately as you edit.
+- In self-hosted Docker/local mode, changes autosave to mounted **`data/network.json`**.
+- Netlify/demo is intentionally read-only; edits are in-memory only.
 
 ---
 
@@ -92,7 +98,8 @@ pnpm run dev
 ```bash
 pnpm run build          # default (Docker/static target)
 pnpm run build:docker   # explicit Docker/static target
-pnpm run build:netlify  # explicit Netlify target
+pnpm run build:netlify  # Netlify target (read-only mode)
+pnpm run icons:manifest # regenerate local vendor icon manifest
 ```
 
 ---
@@ -102,9 +109,13 @@ pnpm run build:netlify  # explicit Netlify target
 ```text
 open-network-diagram/
 ├── src/                    # Svelte app source
+├── src/lib/config/vendorIconManifest.ts # Generated local icon catalog
 ├── static/data/network.json # Demo dataset (Netlify/demo)
+├── static/icons/vendor/     # Vendored icon assets (runtime-local)
 ├── data/network.json.example # User data template (Docker)
+├── third_party/             # Third-party license/provenance notes
 ├── Dockerfile              # Docker build/runtime
+├── server.mjs              # Node runtime server (static + /api/network-data)
 ├── docker-compose.yml      # Local Docker run with mounted data
 ├── netlify.toml            # Netlify build config
 ├── .github/workflows/      # CI workflows (PR build + automated release/publish)
@@ -124,8 +135,31 @@ docker build -t open-network-diagram .
 ### **Run Locally**
 
 ```bash
-docker run --rm -p 8080:80 -v "$(pwd)/data:/usr/share/nginx/html/data:ro" open-network-diagram
+docker run --rm -p 8080:3000 \
+  -e NETWORK_DATA_FILE=/app/data/network.json \
+  -e NETWORK_BACKUP_DIR=/app/data/.backups \
+  -v "$(pwd)/data:/app/data" \
+  open-network-diagram
 ```
+
+### **Write API Environment Variables**
+
+- **`NETWORK_READ_ONLY`** (default: `false`)  
+  Set to `true` to disable `PUT /api/network-data` and force read-only mode.
+- **`NETWORK_DATA_FILE`** (default: `data/network.json`)  
+  JSON file path to read/write.
+- **`NETWORK_BACKUP_DIR`** (default: sibling `.backups`)  
+  Backup directory for rolling save backups (last 5 retained).
+
+### **Local Icon Catalog (No Runtime Network Dependency)**
+
+- Icons are vendored locally under **`static/icons/vendor/homarr/`**.
+- The searchable catalog is generated into **`src/lib/config/vendorIconManifest.ts`**.
+- Third-party provenance and licensing are documented in:
+  - **`third_party/homarr-dashboard-icons/SOURCE.txt`**
+  - **`third_party/homarr-dashboard-icons/LICENSE`**
+  - **`third_party/homarr-dashboard-icons/NOTICE.txt`**
+- Runtime icon search/rendering does not call external APIs.
 
 ### **CI/CD (GitHub Actions + Netlify)**
 
@@ -160,16 +194,6 @@ Define your network using **`network.json`**:
 	"devices": [{ "name": "Switch", "ipAddress": "10.0.0.2", "type": "Nintendo Switch" }]
 }
 ```
-
----
-
-## **🔜 Roadmap**
-
-✅ **Initial version with JSON-based diagrams**  
-⏳ **Drag-and-drop editing in the UI**  
-⏳ **Custom icons for different devices**  
-⏳ **Export diagrams as PNG/SVG/Graphviz**  
-⏳ **Dark mode & UI themes**
 
 ---
 

@@ -1,4 +1,5 @@
 import type { ConnectedPortRef, NetworkData, Port } from '../types';
+import { resolveIconPath } from '../config/iconRegistry';
 import type { GraphEdgeElement, GraphNodeElement, GraphTransformResult } from './types';
 
 interface EndpointOwner {
@@ -8,8 +9,12 @@ interface EndpointOwner {
 	ports: Map<string, Port>;
 }
 
-function toOwnerKey(kind: EndpointOwner['kind'], name: string): string {
-	return `${kind}:${name}`;
+function normalizeOwnerName(name: string): string {
+	return name.trim().toLowerCase();
+}
+
+function toOwnerLookupKey(kind: EndpointOwner['kind'], name: string): string {
+	return `${kind}:${normalizeOwnerName(name)}`;
 }
 
 function toMachineNodeId(name: string): string {
@@ -75,7 +80,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 			vmCount: number;
 		}
 	> = {};
-	const ownersByKey = new Map<string, EndpointOwner>();
+	const ownersByLookup = new Map<string, EndpointOwner>();
 	const seenWarnings = new Set<string>();
 
 	const warn = (message: string) => {
@@ -86,14 +91,14 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 	};
 
 	const addOwner = (owner: EndpointOwner) => {
-		const ownerKey = toOwnerKey(owner.kind, owner.name);
-		if (ownersByKey.has(ownerKey)) {
+		const ownerLookupKey = toOwnerLookupKey(owner.kind, owner.name);
+		if (ownersByLookup.has(ownerLookupKey)) {
 			warn(
 				`Duplicate ${owner.kind} name "${owner.name}" found. First occurrence will be used for link resolution.`
 			);
 			return;
 		}
-		ownersByKey.set(ownerKey, owner);
+		ownersByLookup.set(ownerLookupKey, owner);
 	};
 
 	let hostingEdgeCounter = 0;
@@ -110,24 +115,27 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 
 		nodes.push({
 			data: {
-				id: machineNodeId,
-				label: machine.machineName,
-				rawName: machine.machineName,
-				kind: 'machine',
+					id: machineNodeId,
+					label: machine.machineName,
+					rawName: machine.machineName,
+					kind: 'machine',
+				iconKey: machine.iconKey,
+				iconUrl: resolveIconPath(machine.iconKey),
 				nodeWidth: 200,
 				nodeHeight: 110,
 				details: {
 					type: 'machine',
-						name: machine.machineName,
-						ip: machine.ipAddress,
-						role: machine.role,
-						os: machine.operatingSystem,
-						cpu: machine.hardware?.cpu ?? 'Unknown',
-						ram: machine.hardware?.ram ?? 'Unknown',
-						gpu: machine.hardware?.gpu ?? undefined,
-						ports: machinePortsList,
-						vmCount: machineVms.length,
-						vms: machineVms
+					name: machine.machineName,
+					iconKey: machine.iconKey,
+					ip: machine.ipAddress,
+					role: machine.role,
+					os: machine.operatingSystem,
+					cpu: machine.hardware?.cpu ?? 'Unknown',
+					ram: machine.hardware?.ram ?? 'Unknown',
+					gpu: machine.hardware?.gpu ?? undefined,
+					ports: machinePortsList,
+					vmCount: machineVms.length,
+					vms: machineVms
 				}
 			}
 		});
@@ -148,11 +156,14 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 					rawName: vm.name,
 					kind: 'vm',
 					hostMachineId: machineNodeId,
+					iconKey: vm.iconKey,
+					iconUrl: resolveIconPath(vm.iconKey),
 					nodeWidth: 140,
 					nodeHeight: 66,
 					details: {
 						type: 'vm',
 						name: vm.name,
+						iconKey: vm.iconKey,
 						ip: vm.ipAddress,
 						role: vm.role,
 						hostName: machine.machineName
@@ -199,11 +210,14 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 				label: device.name,
 				rawName: device.name,
 				kind: 'device',
+				iconKey: device.iconKey,
+				iconUrl: resolveIconPath(device.iconKey),
 				nodeWidth: 176,
 				nodeHeight: 116,
 				details: {
 					type: 'device',
 					name: device.name,
+					iconKey: device.iconKey,
 					ip: device.ipAddress,
 					deviceType: device.type,
 					notes: device.notes,
@@ -228,15 +242,17 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 	const seenPhysicalConnections = new Set<string>();
 	let physicalEdgeCounter = 0;
 
-	for (const owner of ownersByKey.values()) {
+	for (const owner of ownersByLookup.values()) {
 		for (const port of owner.ports.values()) {
 			const connectedTo = parseConnectedTo(port.connectedTo);
 			if (!connectedTo) {
 				continue;
 			}
 
-			const machineTargetOwner = ownersByKey.get(toOwnerKey('machine', connectedTo.device));
-			const deviceTargetOwner = ownersByKey.get(toOwnerKey('device', connectedTo.device));
+			const machineTargetOwner = ownersByLookup.get(
+				toOwnerLookupKey('machine', connectedTo.device)
+			);
+			const deviceTargetOwner = ownersByLookup.get(toOwnerLookupKey('device', connectedTo.device));
 			if (machineTargetOwner && deviceTargetOwner) {
 				warn(
 					`Link from "${owner.name}:${port.portName}" references ambiguous device "${connectedTo.device}" (matches both machine and device names).`
