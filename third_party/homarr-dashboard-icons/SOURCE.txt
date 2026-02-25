@@ -1,0 +1,7 @@
+Upstream repository: https://github.com/homarr-labs/dashboard-icons
+Upstream commit: b44b1bc165d9e7203097dde5d174190e80b6e9ae
+Upstream commit date (UTC): 2026-02-25T10:27:35Z
+Imported on: 2026-02-25
+License: Apache-2.0
+Notes: Icons are vendored locally for offline/runtime independence.
+Trademark notice: Product names, logos, and trademarks remain property of their respective owners.

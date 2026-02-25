@@ -17,6 +17,7 @@
 ✅ **Interactive network visualisation**  
 ✅ **Single-page modal editor with live updates**  
 ✅ **Debounced autosave to JSON (self-hosted)**  
+✅ **Local vendored icon catalog (offline runtime)**  
 ✅ **Lightweight Svelte**
 
 Use it to **document your home lab, office network, or cloud infrastructure** with an easy-to-use web interface.
@@ -96,6 +97,7 @@ pnpm run dev
 pnpm run build          # default (Docker/static target)
 pnpm run build:docker   # explicit Docker/static target
 pnpm run build:netlify  # Netlify target (read-only mode)
+pnpm run icons:manifest # regenerate local vendor icon manifest
 ```
 
 ---
@@ -105,8 +107,11 @@ pnpm run build:netlify  # Netlify target (read-only mode)
 ```text
 open-network-diagram/
 ├── src/                    # Svelte app source
+├── src/lib/config/vendorIconManifest.ts # Generated local icon catalog
 ├── static/data/network.json # Demo dataset (Netlify/demo)
+├── static/icons/vendor/     # Vendored icon assets (runtime-local)
 ├── data/network.json.example # User data template (Docker)
+├── third_party/             # Third-party license/provenance notes
 ├── Dockerfile              # Docker build/runtime
 ├── server.mjs              # Node runtime server (static + /api/network-data)
 ├── docker-compose.yml      # Local Docker run with mounted data
@@ -143,6 +148,16 @@ docker run --rm -p 8080:3000 \
   JSON file path to read/write.
 - **`NETWORK_BACKUP_DIR`** (default: sibling `.backups`)  
   Backup directory for rolling save backups (last 5 retained).
+
+### **Local Icon Catalog (No Runtime Network Dependency)**
+
+- Icons are vendored locally under **`static/icons/vendor/homarr/`**.
+- The searchable catalog is generated into **`src/lib/config/vendorIconManifest.ts`**.
+- Third-party provenance and licensing are documented in:
+  - **`third_party/homarr-dashboard-icons/SOURCE.txt`**
+  - **`third_party/homarr-dashboard-icons/LICENSE`**
+  - **`third_party/homarr-dashboard-icons/NOTICE.txt`**
+- Runtime icon search/rendering does not call external APIs.
 
 ### **CI/CD (GitHub Actions + Netlify)**
 
