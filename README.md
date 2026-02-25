@@ -12,7 +12,7 @@ Open Network Diagram helps you document your infrastructure in a visual UI while
 
 - Homelab-friendly: run it in minutes with Docker.
 - Practical: edit in the UI and autosave to `network.json`.
-- Declarative: keep your topology in Git if you want.
+- Declarative: keep your topology in Git if you wish.
 
 [Docker Hub](https://hub.docker.com/r/jcreek23/open-network-diagram) | [Live Demo (Read-Only)](https://opennetworkdiagram.jcreek.co.uk) | [GitHub Releases](https://github.com/jcreek/OpenNetworkDiagram/releases)
 

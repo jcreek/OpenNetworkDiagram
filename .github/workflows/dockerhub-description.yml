@@ -21,7 +21,7 @@ jobs:
       - name: Preflight Docker Hub repository access
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
           DOCKERHUB_REPOSITORY: jcreek23/open-network-diagram
         run: |
           set -euo pipefail
@@ -53,7 +53,7 @@ jobs:
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: jcreek23/open-network-diagram
           readme-filepath: ./README.md
           enable-url-completion: true
