@@ -10,6 +10,8 @@
  * @typedef {{ valid: boolean; errors: ValidationIssue[]; data?: NetworkData }} ValidationResult
  * @typedef {{ allowEmpty?: boolean; optional?: boolean }} ReadStringOptions
  * @typedef {{ optional?: boolean; min?: number }} ReadNumberOptions
+ * @typedef {{ port: Port; originalIndex: number }} PortEntry
+ * @typedef {{ vm: VM; originalIndex: number }} VmEntry
  */
 
 /**
@@ -130,19 +132,19 @@ export function normalizePort(issues, path, value, ownerLabel) {
 
 /**
  * @param {ValidationIssue[]} issues
- * @param {Port[]} ports
+ * @param {PortEntry[]} portEntries
  * @param {string} path
  * @param {string} ownerName
  * @returns {void}
  */
-function validatePortUniqueness(issues, ports, path, ownerName) {
+function validatePortUniqueness(issues, portEntries, path, ownerName) {
 	const seen = new Set();
-	for (let index = 0; index < ports.length; index += 1) {
-		const key = ports[index].portName.toLowerCase();
+	for (const { port, originalIndex } of portEntries) {
+		const key = port.portName.toLowerCase();
 		if (seen.has(key)) {
 			issues.push({
-				path: `${path}[${index}].portName`,
-				message: `duplicate port name "${ports[index].portName}" for ${ownerName}`
+				path: `${path}[${originalIndex}].portName`,
+				message: `duplicate port name "${port.portName}" for ${ownerName}`
 			});
 		}
 		seen.add(key);
@@ -203,20 +205,23 @@ function normalizeMachine(issues, path, value) {
 	if (!Array.isArray(vmRaw)) {
 		issues.push({ path: `${path}.software.vms`, message: 'must be an array' });
 	}
+	/** @type {VmEntry[]} */
+	const vmEntries = [];
 	const vms = [];
 	for (const [vmIndex, vmValue] of (Array.isArray(vmRaw) ? vmRaw : []).entries()) {
 		const vm = normalizeVm(issues, `${path}.software.vms[${vmIndex}]`, vmValue);
 		if (vm) {
+			vmEntries.push({ vm, originalIndex: vmIndex });
 			vms.push(vm);
 		}
 	}
 
 	const vmSeen = new Set();
-	for (const [vmIndex, vm] of vms.entries()) {
+	for (const { vm, originalIndex } of vmEntries) {
 		const vmKey = vm.name.toLowerCase();
 		if (vmSeen.has(vmKey)) {
 			issues.push({
-				path: `${path}.software.vms[${vmIndex}].name`,
+				path: `${path}.software.vms[${originalIndex}].name`,
 				message: `duplicate VM name "${vm.name}" for machine "${machineName ?? 'unknown'}"`
 			});
 		}
@@ -252,14 +257,17 @@ function normalizeMachine(issues, path, value) {
 	if (portsRaw !== undefined && !Array.isArray(portsRaw)) {
 		issues.push({ path: `${path}.ports`, message: 'must be an array when provided' });
 	}
+	/** @type {PortEntry[]} */
+	const portEntries = [];
 	const ports = [];
 	for (const [portIndex, portValue] of (Array.isArray(portsRaw) ? portsRaw : []).entries()) {
 		const port = normalizePort(issues, `${path}.ports[${portIndex}]`, portValue, 'machine');
 		if (port) {
+			portEntries.push({ port, originalIndex: portIndex });
 			ports.push(port);
 		}
 	}
-	validatePortUniqueness(issues, ports, `${path}.ports`, machineName ?? 'machine');
+	validatePortUniqueness(issues, portEntries, `${path}.ports`, machineName ?? 'machine');
 
 	if (
 		!machineName ||
@@ -315,14 +323,17 @@ function normalizeDevice(issues, path, value) {
 	if (portsRaw !== undefined && !Array.isArray(portsRaw)) {
 		issues.push({ path: `${path}.ports`, message: 'must be an array when provided' });
 	}
+	/** @type {PortEntry[]} */
+	const portEntries = [];
 	const ports = [];
 	for (const [portIndex, portValue] of (Array.isArray(portsRaw) ? portsRaw : []).entries()) {
 		const port = normalizePort(issues, `${path}.ports[${portIndex}]`, portValue, 'device');
 		if (port) {
+			portEntries.push({ port, originalIndex: portIndex });
 			ports.push(port);
 		}
 	}
-	validatePortUniqueness(issues, ports, `${path}.ports`, name ?? 'device');
+	validatePortUniqueness(issues, portEntries, `${path}.ports`, name ?? 'device');
 
 	if (!name || !ipAddress || !type) {
 		return null;
