@@ -21,6 +21,7 @@ export interface VM {
 	name: string;
 	role: string;
 	ipAddress: string;
+	iconKey?: string;
 }
 
 export interface Software {
@@ -32,6 +33,7 @@ export interface Machine {
 	ipAddress: string;
 	role: string;
 	operatingSystem: string;
+	iconKey?: string;
 	software: Software;
 	hardware: Hardware;
 	ports?: Port[];
@@ -41,6 +43,7 @@ export interface NetworkDevice {
 	name: string;
 	ipAddress: string;
 	type: string;
+	iconKey?: string;
 	notes?: string;
 	ports?: Port[];
 }

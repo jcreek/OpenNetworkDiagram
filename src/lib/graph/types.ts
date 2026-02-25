@@ -13,6 +13,7 @@ export interface PortDetails {
 export interface MachineDetails {
 	type: 'machine';
 	name: string;
+	iconKey?: string;
 	ip: string;
 	role: string;
 	os: string;
@@ -31,6 +32,7 @@ export interface MachineDetails {
 export interface DeviceDetails {
 	type: 'device';
 	name: string;
+	iconKey?: string;
 	ip: string;
 	deviceType: string;
 	notes?: string;
@@ -40,6 +42,7 @@ export interface DeviceDetails {
 export interface VmDetails {
 	type: 'vm';
 	name: string;
+	iconKey?: string;
 	ip: string;
 	role: string;
 	hostName: string;
@@ -55,6 +58,8 @@ export interface GraphNodeData {
 	hostMachineId?: string;
 	nodeWidth?: number;
 	nodeHeight?: number;
+	iconUrl?: string;
+	iconKey?: string;
 	details?: GraphNodeDetails;
 }
 

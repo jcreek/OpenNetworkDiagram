@@ -1,2 +1,30 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
+
+:root {
+	--app-bg: #e2e8f0;
+	--panel-bg: #f8fafc;
+	--panel-border: #cbd5e1;
+	--panel-contrast: #0f172a;
+	--muted-text: #334155;
+	--chip-bg: #e2e8f0;
+	--chip-text: #0f172a;
+	--modal-overlay: rgba(15, 23, 42, 0.58);
+}
+
+:root[data-theme='dark'] {
+	--app-bg: #0b1220;
+	--panel-bg: #111827;
+	--panel-border: #334155;
+	--panel-contrast: #e2e8f0;
+	--muted-text: #94a3b8;
+	--chip-bg: #1e293b;
+	--chip-text: #e2e8f0;
+	--modal-overlay: rgba(2, 6, 23, 0.78);
+}
+
+html,
+body {
+	background: var(--app-bg);
+	color: var(--panel-contrast);
+}
