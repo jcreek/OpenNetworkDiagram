@@ -2,8 +2,7 @@ import { json } from '@sveltejs/kit';
 
 import { validateNetworkData } from '$lib/data/networkSchema';
 import {
-	checkWritableState,
-	isWriteEnabled,
+	getWritableState,
 	readNetworkFile,
 	writeNetworkFile
 } from '$lib/server/networkPersistence';
@@ -16,11 +15,18 @@ function serializeValidationErrors(errors: Array<{ path: string; message: string
 	}));
 }
 
+function resolveReadOnlyErrorMessage(reason: string | null): string {
+	if (!reason) {
+		return 'Write API unavailable in current deployment.';
+	}
+	return `Write API unavailable: ${reason}`;
+}
+
 export const GET: RequestHandler = async () => {
 	try {
-		const [{ data, source, updatedAt }, writable] = await Promise.all([
+		const [{ data, source, updatedAt }, writableState] = await Promise.all([
 			readNetworkFile(),
-			checkWritableState()
+			getWritableState()
 		]);
 		const validation = validateNetworkData(data);
 		if (!validation.valid || !validation.data) {
@@ -35,7 +41,8 @@ export const GET: RequestHandler = async () => {
 
 		return json({
 			data: validation.data,
-			writable,
+			writable: writableState.writable,
+			writableReason: writableState.reason,
 			source,
 			updatedAt
 		});
@@ -47,10 +54,13 @@ export const GET: RequestHandler = async () => {
 };
 
 export const PUT: RequestHandler = async ({ request }) => {
-	if (!isWriteEnabled()) {
+	const writableStateBeforeWrite = await getWritableState();
+	if (!writableStateBeforeWrite.writable) {
 		return json(
 			{
-				error: 'Write API disabled. Unset NETWORK_READ_ONLY to enable persistence.'
+				error: resolveReadOnlyErrorMessage(writableStateBeforeWrite.reason),
+				writable: false,
+				writableReason: writableStateBeforeWrite.reason
 			},
 			{ status: 403 }
 		);
@@ -76,10 +86,11 @@ export const PUT: RequestHandler = async ({ request }) => {
 
 	try {
 		const metadata = await writeNetworkFile(validation.data);
-		const writable = await checkWritableState();
+		const writableStateAfterWrite = await getWritableState();
 		return json({
 			data: validation.data,
-			writable,
+			writable: writableStateAfterWrite.writable,
+			writableReason: writableStateAfterWrite.reason,
 			source: metadata.source,
 			updatedAt: metadata.updatedAt
 		});
