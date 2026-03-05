@@ -4,8 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateNetworkData } from './src/lib/shared/networkSchemaCore.mjs';
 import {
-	checkWritableState,
-	isWriteEnabled,
+	getWritableState,
 	readNetworkFile,
 	writeNetworkFile
 } from './src/lib/shared/networkPersistenceCore.mjs';
@@ -50,10 +49,17 @@ function badRequest(response, message, details) {
 	});
 }
 
+function resolveReadOnlyErrorMessage(reason) {
+	if (!reason) {
+		return 'Write API unavailable in current deployment.';
+	}
+	return `Write API unavailable: ${reason}`;
+}
+
 async function serveApi(request, response) {
 	if (request.method === 'GET') {
 		try {
-			const payload = await readNetworkFile();
+			const [payload, writableState] = await Promise.all([readNetworkFile(), getWritableState()]);
 			const validation = validateNetworkData(payload.data);
 			if (!validation.valid) {
 				sendJson(response, 500, {
@@ -63,11 +69,10 @@ async function serveApi(request, response) {
 				return;
 			}
 
-			const canWrite = await checkWritableState();
-
 			sendJson(response, 200, {
 				data: validation.data,
-				writable: canWrite,
+				writable: writableState.writable,
+				writableReason: writableState.reason,
 				source: payload.source,
 				updatedAt: payload.updatedAt
 			});
@@ -80,9 +85,12 @@ async function serveApi(request, response) {
 	}
 
 	if (request.method === 'PUT') {
-		if (!isWriteEnabled()) {
+		const writableStateBeforeWrite = await getWritableState();
+		if (!writableStateBeforeWrite.writable) {
 			sendJson(response, 403, {
-				error: 'Write API disabled. Unset NETWORK_READ_ONLY to enable persistence.'
+				error: resolveReadOnlyErrorMessage(writableStateBeforeWrite.reason),
+				writable: false,
+				writableReason: writableStateBeforeWrite.reason
 			});
 			return;
 		}
@@ -123,9 +131,11 @@ async function serveApi(request, response) {
 
 		try {
 			const metadata = await writeNetworkFile(validation.data);
+			const writableStateAfterWrite = await getWritableState();
 			sendJson(response, 200, {
 				data: validation.data,
-				writable: true,
+				writable: writableStateAfterWrite.writable,
+				writableReason: writableStateAfterWrite.reason,
 				source: metadata.source,
 				updatedAt: metadata.updatedAt
 			});

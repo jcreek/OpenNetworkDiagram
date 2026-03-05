@@ -16,6 +16,7 @@ import path from 'node:path';
  * @typedef {{ machines: unknown[]; devices: unknown[] }} NetworkData
  * @typedef {{ source: string; updatedAt: string }} NetworkFileMetadata
  * @typedef {{ data: NetworkData } & NetworkFileMetadata} NetworkFileReadResult
+ * @typedef {{ writable: boolean; reason: string | null }} WritableState
  */
 
 const NETWORK_READ_ONLY = process.env.NETWORK_READ_ONLY === 'true';
@@ -41,6 +42,38 @@ function resolveBackupDirectory() {
  */
 export function isWriteEnabled() {
 	return !NETWORK_READ_ONLY;
+}
+
+/**
+ * @param {unknown} error
+ * @returns {string}
+ */
+function formatFileSystemErrorCode(error) {
+	if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') {
+		return error.code;
+	}
+	return 'UNKNOWN';
+}
+
+/**
+ * @param {string} directory
+ * @param {string} label
+ * @returns {Promise<string | null>}
+ */
+async function assertDirectoryWritable(directory, label) {
+	try {
+		await mkdir(directory, { recursive: true });
+	} catch (error) {
+		return `${label} directory "${directory}" could not be created (${formatFileSystemErrorCode(error)}).`;
+	}
+
+	try {
+		await access(directory, constants.W_OK);
+	} catch (error) {
+		return `${label} directory "${directory}" is not writable (${formatFileSystemErrorCode(error)}).`;
+	}
+
+	return null;
 }
 
 /**
@@ -151,20 +184,62 @@ export async function writeNetworkFile(data) {
 }
 
 /**
- * @returns {Promise<boolean>}
+ * @returns {Promise<WritableState>}
  */
-export async function checkWritableState() {
+export async function getWritableState() {
 	if (!isWriteEnabled()) {
-		return false;
+		return {
+			writable: false,
+			reason: 'Writes disabled by NETWORK_READ_ONLY=true.'
+		};
 	}
 
 	const source = resolveDataFilePath();
 	const directory = path.dirname(source);
-	try {
-		await mkdir(directory, { recursive: true });
-		await access(directory, constants.W_OK);
-	} catch {
-		return false;
+	const dataDirectoryError = await assertDirectoryWritable(directory, 'Data');
+	if (dataDirectoryError) {
+		return {
+			writable: false,
+			reason: dataDirectoryError
+		};
 	}
-	return true;
+
+	const backupDirectory = resolveBackupDirectory();
+	const backupDirectoryError = await assertDirectoryWritable(backupDirectory, 'Backup');
+	if (backupDirectoryError) {
+		return {
+			writable: false,
+			reason: backupDirectoryError
+		};
+	}
+
+	try {
+		await access(source, constants.F_OK);
+	} catch {
+		return {
+			writable: true,
+			reason: null
+		};
+	}
+
+	try {
+		await access(source, constants.R_OK | constants.W_OK);
+	} catch (error) {
+		return {
+			writable: false,
+			reason: `Data file "${source}" exists but is not readable and writable (${formatFileSystemErrorCode(error)}).`
+		};
+	}
+
+	return {
+		writable: true,
+		reason: null
+	};
+}
+
+/**
+ * @returns {Promise<boolean>}
+ */
+export async function checkWritableState() {
+	return (await getWritableState()).writable;
 }

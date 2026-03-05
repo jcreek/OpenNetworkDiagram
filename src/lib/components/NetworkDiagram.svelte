@@ -73,7 +73,8 @@
 	let saveState: SaveState = 'saved';
 	let dataSourceLabel = jsonPath;
 	let writable = false;
-	let readOnlyNotice = 'Read-only deployment; changes are not persisted.';
+	const defaultReadOnlyNotice = 'Read-only deployment; changes are not persisted.';
+	let readOnlyNotice = defaultReadOnlyNotice;
 
 	let showEthernetLabels = false;
 	let diagramViewMode: DiagramViewMode = 'network';
@@ -399,6 +400,13 @@
 			return error.message;
 		}
 		return 'Unexpected error';
+	}
+
+	function resolveReadOnlyNotice(reason: string | null | undefined): string {
+		if (!reason) {
+			return defaultReadOnlyNotice;
+		}
+		return `Read-only: ${reason}`;
 	}
 
 	function createGraphStyles(theme: ThemeMode): cytoscape.Stylesheet[] {
@@ -976,8 +984,12 @@
 			});
 
 			if (response.status === 403) {
+				const body = (await response.json().catch(() => ({}))) as {
+					error?: string;
+					writableReason?: string | null;
+				};
 				writable = false;
-				readOnlyNotice = 'Read-only deployment; changes are not persisted.';
+				readOnlyNotice = resolveReadOnlyNotice(body.writableReason ?? body.error ?? null);
 				saveState = 'unsaved';
 				return;
 			}
@@ -998,10 +1010,14 @@
 			const body = (await response.json()) as {
 				data: NetworkData;
 				writable: boolean;
+				writableReason?: string | null;
 				source: string;
 				updatedAt: string;
 			};
 			writable = body.writable;
+			readOnlyNotice = body.writable
+				? defaultReadOnlyNotice
+				: resolveReadOnlyNotice(body.writableReason);
 			dataSourceLabel = body.source;
 			lastSavedSnapshot = JSON.stringify(body.data);
 			networkData = cloneNetworkData(body.data);
@@ -1385,6 +1401,7 @@
 			const body = (await response.json()) as {
 				data: NetworkData;
 				writable: boolean;
+				writableReason?: string | null;
 				source: string;
 				updatedAt: string;
 			};
@@ -1396,6 +1413,9 @@
 				networkData = cloneNetworkData(validation.data);
 				ensureSelectedTargetValid();
 				writable = body.writable;
+				readOnlyNotice = body.writable
+					? defaultReadOnlyNotice
+					: resolveReadOnlyNotice(body.writableReason);
 				dataSourceLabel = body.source;
 				lastSavedSnapshot = JSON.stringify(networkData);
 				saveState = 'saved';
@@ -1414,6 +1434,7 @@
 				networkData = cloneNetworkData(fallbackData);
 				ensureSelectedTargetValid();
 				writable = false;
+				readOnlyNotice = 'Read-only: API unavailable; using bundled static data.';
 				dataSourceLabel = jsonPath;
 				lastSavedSnapshot = JSON.stringify(networkData);
 				saveState = 'saved';

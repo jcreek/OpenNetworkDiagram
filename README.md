@@ -128,6 +128,7 @@ pnpm run icons:manifest # regenerate local vendor icon manifest
 
 - API endpoint: `GET/PUT /api/network-data`
 - Writes are enabled unless `NETWORK_READ_ONLY=true`
+- When writes are unavailable, API responses include `writableReason` for diagnostics.
 - Writes are persisted atomically to the configured data file
 - Rolling backups are kept in the backup directory (last 5)
 
