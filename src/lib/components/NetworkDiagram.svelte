@@ -1931,6 +1931,21 @@
 						)}
 				/>
 			</label>
+			<label>
+				Notes
+				<textarea
+					value={selectedMachine.notes ?? ''}
+					on:input={(event) =>
+						mutateDraft(
+							(draft) => {
+								draft.machines[selectedTarget.index].notes = (
+									event.currentTarget as HTMLTextAreaElement
+								).value;
+							},
+							{ autosave: true }
+						)}
+				></textarea>
+			</label>
 		</section>
 
 		<section class="edit-section">
@@ -2038,6 +2053,15 @@
 						/>
 					</label>
 					<label>
+						MAC Address
+						<input
+							type="text"
+							placeholder="aa:bb:cc:dd:ee:ff"
+							bind:value={vm.macAddress}
+							on:input={() => mutateDraft(() => undefined, { autosave: true })}
+						/>
+					</label>
+					<label>
 						Icon
 						<input
 							type="text"
@@ -2098,6 +2122,15 @@
 							type="number"
 							min="0"
 							bind:value={port.speedGbps}
+							on:input={() => mutateDraft(() => undefined, { autosave: true })}
+						/>
+					</label>
+					<label>
+						MAC Address
+						<input
+							type="text"
+							placeholder="aa:bb:cc:dd:ee:ff"
+							bind:value={port.macAddress}
 							on:input={() => mutateDraft(() => undefined, { autosave: true })}
 						/>
 					</label>
@@ -2265,6 +2298,15 @@
 							on:input={() => mutateDraft(() => undefined, { autosave: true })}
 						/>
 					</label>
+					<label>
+						MAC Address
+						<input
+							type="text"
+							placeholder="aa:bb:cc:dd:ee:ff"
+							bind:value={port.macAddress}
+							on:input={() => mutateDraft(() => undefined, { autosave: true })}
+						/>
+					</label>
 						<label>
 							Connect To Device
 							<input
@@ -2374,6 +2416,23 @@
 						)}
 				/>
 			</label>
+			<label>
+				MAC Address
+				<input
+					type="text"
+					placeholder="aa:bb:cc:dd:ee:ff"
+					value={selectedVm.macAddress ?? ''}
+					on:input={(event) =>
+						mutateDraft(
+							(draft) => {
+								draft.machines[selectedTarget.machineIndex].software.vms[
+									selectedTarget.vmIndex
+								].macAddress = (event.currentTarget as HTMLInputElement).value;
+							},
+							{ autosave: true }
+						)}
+				/>
+			</label>
 		</section>
 		<div class="modal-footer">
 			<button
@@ -2453,6 +2512,10 @@
 			<label>
 				Operating System
 				<input type="text" bind:value={newMachineDraft.operatingSystem} />
+			</label>
+			<label>
+				Notes
+				<textarea bind:value={newMachineDraft.notes}></textarea>
 			</label>
 		</section>
 	{:else if addModalKind === 'device'}

@@ -6,6 +6,7 @@ export interface ConnectedPortRef {
 export interface Port {
 	portName: string;
 	speedGbps?: number; // default to 1 if not provided
+	macAddress?: string;
 	connectedTo?: ConnectedPortRef;
 }
 
@@ -22,6 +23,7 @@ export interface VM {
 	role: string;
 	ipAddress: string;
 	iconKey?: string;
+	macAddress?: string;
 }
 
 export interface Software {
@@ -34,6 +36,7 @@ export interface Machine {
 	role: string;
 	operatingSystem: string;
 	iconKey?: string;
+	notes?: string;
 	software: Software;
 	hardware: Hardware;
 	ports?: Port[];

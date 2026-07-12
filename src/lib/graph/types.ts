@@ -4,6 +4,7 @@ export type GraphEdgeKind = 'physical' | 'hosting';
 export interface PortDetails {
 	portName: string;
 	speedGbps?: number;
+	macAddress?: string;
 	connectedTo?: {
 		device: string;
 		port: string;
@@ -20,12 +21,14 @@ export interface MachineDetails {
 	cpu: string;
 	ram: string;
 	gpu?: string;
+	notes?: string;
 	ports: PortDetails[];
 	vmCount: number;
 	vms: Array<{
 		name: string;
 		ip: string;
 		role: string;
+		macAddress?: string;
 	}>;
 }
 
@@ -45,6 +48,7 @@ export interface VmDetails {
 	iconKey?: string;
 	ip: string;
 	role: string;
+	macAddress?: string;
 	hostName: string;
 }
 

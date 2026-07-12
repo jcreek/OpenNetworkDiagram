@@ -110,7 +110,8 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 		const machineVms = sourceMachineVms.map((vm) => ({
 			name: vm.name,
 			ip: vm.ipAddress,
-			role: vm.role
+			role: vm.role,
+			macAddress: vm.macAddress
 		}));
 
 		nodes.push({
@@ -133,6 +134,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 					cpu: machine.hardware?.cpu ?? 'Unknown',
 					ram: machine.hardware?.ram ?? 'Unknown',
 					gpu: machine.hardware?.gpu ?? undefined,
+					notes: machine.notes,
 					ports: machinePortsList,
 					vmCount: machineVms.length,
 					vms: machineVms
@@ -166,6 +168,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 						iconKey: vm.iconKey,
 						ip: vm.ipAddress,
 						role: vm.role,
+						macAddress: vm.macAddress,
 						hostName: machine.machineName
 					}
 				}

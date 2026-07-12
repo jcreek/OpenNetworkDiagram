@@ -5,10 +5,12 @@
 			"ipAddress": "192.168.1.10",
 			"role": "Hypervisor",
 			"operatingSystem": "Linux",
+			"notes": "Optional notes",
 			"ports": [
 				{
 					"portName": "eth0",
 					"speedGbps": 1,
+					"macAddress": "aa:bb:cc:dd:ee:01",
 					"connectedTo": {
 						"device": "Example Switch",
 						"port": "1"
@@ -20,7 +22,8 @@
 					{
 						"name": "Example VM",
 						"role": "Service",
-						"ipAddress": "192.168.1.20"
+						"ipAddress": "192.168.1.20",
+						"macAddress": "aa:bb:cc:dd:ee:02"
 					}
 				]
 			},

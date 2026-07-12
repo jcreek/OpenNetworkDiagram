@@ -1,10 +1,10 @@
 /**
  * @typedef {{ path: string; message: string }} ValidationIssue
  * @typedef {{ device: string; port: string }} ConnectedTo
- * @typedef {{ portName: string; speedGbps?: number; connectedTo?: ConnectedTo }} Port
- * @typedef {{ name: string; role: string; ipAddress: string; iconKey?: string }} VM
+ * @typedef {{ portName: string; speedGbps?: number; macAddress?: string; connectedTo?: ConnectedTo }} Port
+ * @typedef {{ name: string; role: string; ipAddress: string; iconKey?: string; macAddress?: string }} VM
  * @typedef {{ cpu: string; ram: string; networkPorts: number; networkPortSpeedGbps?: number; gpu?: string }} Hardware
- * @typedef {{ machineName: string; ipAddress: string; role: string; operatingSystem: string; iconKey?: string; software: { vms: VM[] }; hardware: Hardware; ports?: Port[] }} Machine
+ * @typedef {{ machineName: string; ipAddress: string; role: string; operatingSystem: string; iconKey?: string; notes?: string; software: { vms: VM[] }; hardware: Hardware; ports?: Port[] }} Machine
  * @typedef {{ name: string; ipAddress: string; type: string; iconKey?: string; notes?: string; ports?: Port[] }} NetworkDevice
  * @typedef {{ machines: Machine[]; devices: NetworkDevice[] }} NetworkData
  * @typedef {{ valid: boolean; errors: ValidationIssue[]; data?: NetworkData }} ValidationResult
@@ -105,6 +105,10 @@ export function normalizePort(issues, path, value, ownerLabel) {
 		optional: true,
 		min: 0
 	});
+	const macAddress = readString(issues, `${path}.macAddress`, value.macAddress, {
+		optional: true,
+		allowEmpty: true
+	});
 
 	let connectedTo;
 	if (value.connectedTo !== undefined) {
@@ -126,6 +130,7 @@ export function normalizePort(issues, path, value, ownerLabel) {
 	return {
 		portName,
 		...(typeof speedGbps === 'number' ? { speedGbps } : {}),
+		...(macAddress ? { macAddress } : {}),
 		...(connectedTo ? { connectedTo } : {})
 	};
 }
@@ -166,6 +171,10 @@ export function normalizeVm(issues, path, value) {
 	const role = readString(issues, `${path}.role`, value.role);
 	const ipAddress = readString(issues, `${path}.ipAddress`, value.ipAddress);
 	const iconKey = readString(issues, `${path}.iconKey`, value.iconKey, { optional: true });
+	const macAddress = readString(issues, `${path}.macAddress`, value.macAddress, {
+		optional: true,
+		allowEmpty: true
+	});
 
 	if (!name || !role || !ipAddress) {
 		return null;
@@ -175,7 +184,8 @@ export function normalizeVm(issues, path, value) {
 		name,
 		role,
 		ipAddress,
-		...(iconKey ? { iconKey } : {})
+		...(iconKey ? { iconKey } : {}),
+		...(macAddress ? { macAddress } : {})
 	};
 }
 
@@ -196,6 +206,7 @@ function normalizeMachine(issues, path, value) {
 	const role = readString(issues, `${path}.role`, value.role);
 	const operatingSystem = readString(issues, `${path}.operatingSystem`, value.operatingSystem);
 	const iconKey = readString(issues, `${path}.iconKey`, value.iconKey, { optional: true });
+	const notes = readString(issues, `${path}.notes`, value.notes, { optional: true, allowEmpty: true });
 
 	const softwareRaw = value.software;
 	if (!isRecord(softwareRaw)) {
@@ -287,6 +298,7 @@ function normalizeMachine(issues, path, value) {
 		role,
 		operatingSystem,
 		...(iconKey ? { iconKey } : {}),
+		...(notes !== undefined ? { notes } : {}),
 		software: { vms },
 		hardware: {
 			cpu: hardware.cpu,

@@ -6,12 +6,14 @@
 			"role": "Hypervisor",
 			"operatingSystem": "Proxmox",
 			"iconKey": "homarr:proxmox",
+			"notes": "Primary router box; do not power off without failover in place.",
 			"software": {
 				"vms": [
 					{
 						"name": "OpnSense",
 						"role": "Router/Firewall/Gateway (DHCP 10.0.0.100-254)",
-						"ipAddress": "10.0.0.1"
+						"ipAddress": "10.0.0.1",
+						"macAddress": "bc:24:11:5a:2e:01"
 					},
 					{
 						"name": "TPLink Omada Controller",
@@ -50,6 +52,7 @@
 				{
 					"portName": "eth0",
 					"speedGbps": 1,
+					"macAddress": "84:47:09:1c:aa:10",
 					"connectedTo": {
 						"device": "Gigabit Switch",
 						"port": "1"
