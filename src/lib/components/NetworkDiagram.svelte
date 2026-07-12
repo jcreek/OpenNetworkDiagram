@@ -73,6 +73,8 @@
 	let newMachineDraft = createEmptyMachine();
 	let newDeviceDraft = createEmptyDevice();
 	let iconSearch = '';
+	let iconPickerExpanded = false;
+	let lastIconPickerContext = '';
 
 	let isLoadingData = false;
 	let loadError: string | null = null;
@@ -330,6 +332,14 @@
 					? selectedVm?.iconKey ?? ''
 					: '';
 	$: selectedTargetIconPath = resolveIconPath(selectedTargetIconKey || undefined);
+	// collapse the icon picker whenever the modal target changes
+	$: {
+		const context = addModalKind ?? (selectedTarget ? JSON.stringify(selectedTarget) : '');
+		if (context !== lastIconPickerContext) {
+			lastIconPickerContext = context;
+			iconPickerExpanded = false;
+		}
+	}
 	$: addModalIconKey =
 		addModalKind === 'machine'
 			? newMachineDraft.iconKey ?? ''
@@ -1315,6 +1325,9 @@
 		if (!target) {
 			return;
 		}
+		if (normalized) {
+			iconPickerExpanded = false;
+		}
 
 		if (target.type === 'machine') {
 			const index = target.index;
@@ -1350,6 +1363,9 @@
 
 	function setAddModalIconKey(nextKey: string) {
 		const normalized = nextKey.trim();
+		if (normalized) {
+			iconPickerExpanded = false;
+		}
 		if (addModalKind === 'machine') {
 			newMachineDraft.iconKey = normalized || undefined;
 			return;
@@ -1724,11 +1740,13 @@
 	function closeSelectedTargetModal() {
 		selectedTarget = null;
 		rackNewNameTarget = null;
+		iconPickerExpanded = false;
 		clearIconSearch();
 	}
 
 	function closeAddEntityModal() {
 		addModalKind = null;
+		iconPickerExpanded = false;
 		clearIconSearch();
 	}
 
@@ -2388,44 +2406,59 @@
 	maxWidth="880px"
 	on:close={closeSelectedTargetModal}
 >
-	<div class="icon-search">
-		<label>
-			Icon Search
-			<input
-				type="text"
-				bind:value={iconSearch}
-				placeholder="Search icons..."
-				autocomplete="off"
-			/>
-		</label>
-		{#if selectedTargetIconPath}
+	{#if selectedTargetIconKey && !iconPickerExpanded}
+		<div class="icon-search-collapsed">
 			<div class="icon-preview-card">
-				<img src={selectedTargetIconPath} alt="Selected icon preview" loading="lazy" />
+				{#if selectedTargetIconPath}
+					<img src={selectedTargetIconPath} alt="Selected icon preview" loading="lazy" />
+				{/if}
 				<code>{selectedTargetIconKey}</code>
 			</div>
-		{/if}
-		<p class="icon-results-meta">
-			Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
-			matching icons
-		</p>
-		<div class="icon-results-grid">
-			{#each visibleIconDefinitions as icon (icon.key)}
-				<button
-					type="button"
-					class="icon-result-option"
-					on:click={() => setSelectedTargetIconKey(icon.key)}
-					title={icon.key}
-				>
-					<img src={icon.path} alt={icon.label} loading="lazy" />
-					<span>{icon.label}</span>
-					<code>{icon.key}</code>
-				</button>
-			{/each}
+			<button type="button" on:click={() => (iconPickerExpanded = true)}>Change Icon</button>
 		</div>
-		{#if filteredIconDefinitions.length === 0}
-			<p class="icon-results-empty">No icons match your search.</p>
-		{/if}
-	</div>
+	{:else}
+		<div class="icon-search">
+			<label>
+				Icon Search
+				<input
+					type="text"
+					bind:value={iconSearch}
+					placeholder="Search icons..."
+					autocomplete="off"
+				/>
+			</label>
+			{#if selectedTargetIconPath}
+				<div class="icon-preview-card">
+					<img src={selectedTargetIconPath} alt="Selected icon preview" loading="lazy" />
+					<code>{selectedTargetIconKey}</code>
+					<button type="button" class="icon-collapse" on:click={() => (iconPickerExpanded = false)}>
+						Done
+					</button>
+				</div>
+			{/if}
+			<p class="icon-results-meta">
+				Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
+				matching icons
+			</p>
+			<div class="icon-results-grid">
+				{#each visibleIconDefinitions as icon (icon.key)}
+					<button
+						type="button"
+						class="icon-result-option"
+						on:click={() => setSelectedTargetIconKey(icon.key)}
+						title={icon.key}
+					>
+						<img src={icon.path} alt={icon.label} loading="lazy" />
+						<span>{icon.label}</span>
+						<code>{icon.key}</code>
+					</button>
+				{/each}
+			</div>
+			{#if filteredIconDefinitions.length === 0}
+				<p class="icon-results-empty">No icons match your search.</p>
+			{/if}
+		</div>
+	{/if}
 	<datalist id="cable-type-options">
 		<option value="Cat5e"></option>
 		<option value="Cat6"></option>
@@ -3293,44 +3326,59 @@
 	maxWidth="760px"
 	on:close={closeAddEntityModal}
 >
-	<div class="icon-search">
-		<label>
-			Icon Search
-			<input
-				type="text"
-				bind:value={iconSearch}
-				placeholder="Search icons..."
-				autocomplete="off"
-			/>
-		</label>
-		{#if addModalIconPath}
+	{#if addModalIconKey && !iconPickerExpanded}
+		<div class="icon-search-collapsed">
 			<div class="icon-preview-card">
-				<img src={addModalIconPath} alt="Selected icon preview" loading="lazy" />
+				{#if addModalIconPath}
+					<img src={addModalIconPath} alt="Selected icon preview" loading="lazy" />
+				{/if}
 				<code>{addModalIconKey}</code>
 			</div>
-		{/if}
-		<p class="icon-results-meta">
-			Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
-			matching icons
-		</p>
-		<div class="icon-results-grid">
-			{#each visibleIconDefinitions as icon (icon.key)}
-				<button
-					type="button"
-					class="icon-result-option"
-					on:click={() => setAddModalIconKey(icon.key)}
-					title={icon.key}
-				>
-					<img src={icon.path} alt={icon.label} loading="lazy" />
-					<span>{icon.label}</span>
-					<code>{icon.key}</code>
-				</button>
-			{/each}
+			<button type="button" on:click={() => (iconPickerExpanded = true)}>Change Icon</button>
 		</div>
-		{#if filteredIconDefinitions.length === 0}
-			<p class="icon-results-empty">No icons match your search.</p>
-		{/if}
-	</div>
+	{:else}
+		<div class="icon-search">
+			<label>
+				Icon Search
+				<input
+					type="text"
+					bind:value={iconSearch}
+					placeholder="Search icons..."
+					autocomplete="off"
+				/>
+			</label>
+			{#if addModalIconPath}
+				<div class="icon-preview-card">
+					<img src={addModalIconPath} alt="Selected icon preview" loading="lazy" />
+					<code>{addModalIconKey}</code>
+					<button type="button" class="icon-collapse" on:click={() => (iconPickerExpanded = false)}>
+						Done
+					</button>
+				</div>
+			{/if}
+			<p class="icon-results-meta">
+				Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
+				matching icons
+			</p>
+			<div class="icon-results-grid">
+				{#each visibleIconDefinitions as icon (icon.key)}
+					<button
+						type="button"
+						class="icon-result-option"
+						on:click={() => setAddModalIconKey(icon.key)}
+						title={icon.key}
+					>
+						<img src={icon.path} alt={icon.label} loading="lazy" />
+						<span>{icon.label}</span>
+						<code>{icon.key}</code>
+					</button>
+				{/each}
+			</div>
+			{#if filteredIconDefinitions.length === 0}
+				<p class="icon-results-empty">No icons match your search.</p>
+			{/if}
+		</div>
+	{/if}
 	{#if addModalKind === 'machine'}
 		<section class="edit-section">
 			<label>
@@ -4174,6 +4222,30 @@
 		margin-bottom: 0.7rem;
 		display: grid;
 		gap: 0.6rem;
+	}
+
+	.icon-search-collapsed {
+		margin-bottom: 0.7rem;
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+
+	.icon-search-collapsed button,
+	.icon-collapse {
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		padding: 0.35rem 0.55rem;
+		border-radius: 7px;
+		font-size: 0.8rem;
+		font-weight: 600;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.icon-collapse {
+		margin-left: auto;
 	}
 
 	.icon-search label {
