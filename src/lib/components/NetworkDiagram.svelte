@@ -23,6 +23,8 @@
 	import loadNetworkData from '$lib/data/loadNetworkData';
 	import { buildIpamReport, suggestNextFreeIp, type IpamReport } from '$lib/data/ipam';
 	import { vlanColor } from '$lib/graph/vlanPalette';
+	import { buildRackLayout, knownRackNames } from '$lib/data/rackLayout';
+	import RackView from './RackView.svelte';
 	import { validateNetworkData, type ValidationIssue } from '$lib/data/networkSchema';
 	import transformNetworkDataToGraph from '$lib/graph/transformNetworkData';
 	import { computeSearchMatches } from '$lib/graph/searchHighlight';
@@ -34,7 +36,7 @@
 	export let jsonPath = '/data/network.json';
 
 	type SaveState = 'saved' | 'saving' | 'unsaved' | 'error';
-	type DiagramViewMode = 'network' | 'device';
+	type DiagramViewMode = 'network' | 'device' | 'rack';
 	type Position = { x: number; y: number };
 	type AddModalKind = 'machine' | 'device' | null;
 	type DeleteTarget =
@@ -160,6 +162,9 @@
 		activeVlanFilter = null;
 		applyEmphasis();
 	}
+
+	$: rackLayout = buildRackLayout(networkData);
+	$: rackNames = knownRackNames(networkData);
 
 	$: ipamReport = buildIpamReport(networkData);
 	$: ipamWarnings = ipamReport.duplicates.map(
@@ -888,8 +893,10 @@
 
 	function onDiagramViewSelectChange(event: Event) {
 		const nextValue = (event.currentTarget as HTMLSelectElement).value;
-		diagramViewMode = nextValue === 'device' ? 'device' : 'network';
-		refreshGraph();
+		diagramViewMode = nextValue === 'device' || nextValue === 'rack' ? nextValue : 'network';
+		if (diagramViewMode !== 'rack') {
+			refreshGraph();
+		}
 	}
 
 	function isHostCollapsed(hostId: string): boolean {
@@ -1424,6 +1431,47 @@
 		updateDevicePortConnection(deviceIndex, portIndex, next);
 	}
 
+	function updateRackField(
+		kind: OwnerKind,
+		index: number,
+		field: 'name' | 'unit' | 'heightU',
+		value: string
+	) {
+		mutateDraft(
+			(draft) => {
+				const entity = kind === 'machine' ? draft.machines[index] : draft.devices[index];
+				if (!entity) {
+					return;
+				}
+				if (field === 'name') {
+					const name = value.trim();
+					if (!name) {
+						delete entity.rack;
+						return;
+					}
+					entity.rack = {
+						name,
+						unit: entity.rack?.unit ?? 1,
+						...(entity.rack?.heightU ? { heightU: entity.rack.heightU } : {})
+					};
+					return;
+				}
+				if (!entity.rack) {
+					return;
+				}
+				const parsed = Number(value);
+				if (field === 'unit') {
+					entity.rack.unit = Number.isInteger(parsed) && parsed >= 1 ? parsed : 1;
+				} else if (Number.isInteger(parsed) && parsed >= 1) {
+					entity.rack.heightU = parsed;
+				} else {
+					delete entity.rack.heightU;
+				}
+			},
+			{ autosave: true }
+		);
+	}
+
 	function updatePortCableField(
 		kind: OwnerKind,
 		ownerName: string,
@@ -1841,6 +1889,20 @@
 		<div class="diagram-stage" bind:this={diagramStage}>
 			<div class="diagram-canvas" bind:this={container}></div>
 
+			{#if diagramViewMode === 'rack'}
+				<RackView
+					layout={rackLayout}
+					on:select={(event) => {
+						const { kind, name } = event.detail;
+						const index =
+							kind === 'machine' ? findMachineIndexByName(name) : findDeviceIndexByName(name);
+						if (index >= 0) {
+							selectedTarget = { type: kind, index };
+						}
+					}}
+				/>
+			{/if}
+
 			<div class="map-controls-shell">
 				{#if mapControlsCollapsed}
 					<button type="button" class="controls-toggle" on:click={toggleMapControls}>Show Controls</button>
@@ -1879,12 +1941,13 @@
 							>
 								<option value="network">Network view (with ethernet)</option>
 								<option value="device">Device view (without ethernet)</option>
+								<option value="rack">Rack view (physical layout)</option>
 							</select>
 						</label>
 						<label
 							class="toggle-control"
-							class:disabled={diagramViewMode === 'device'}
-							title={diagramViewMode === 'device' ? 'Ethernet labels are available in Network view.' : undefined}
+							class:disabled={diagramViewMode !== 'network'}
+							title={diagramViewMode !== 'network' ? 'Ethernet labels are available in Network view.' : undefined}
 						>
 							<span>Ethernet Labels</span>
 							<input
@@ -1892,7 +1955,7 @@
 								type="checkbox"
 								checked={showEthernetLabels}
 								aria-label="Toggle ethernet labels"
-								disabled={diagramViewMode === 'device'}
+								disabled={diagramViewMode !== 'network'}
 								on:change={onEthernetLabelsToggleChange}
 							/>
 							<span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
@@ -1904,7 +1967,14 @@
 						>
 							IPAM
 						</button>
-						<button type="button" on:click={() => (showExportModal = true)}>Export PNG</button>
+						<button
+							type="button"
+							disabled={diagramViewMode === 'rack'}
+							title={diagramViewMode === 'rack' ? 'PNG export is available in the graph views.' : undefined}
+							on:click={() => (showExportModal = true)}
+						>
+							Export PNG
+						</button>
 						<label class="toggle-control">
 							<span>Dark Mode</span>
 							<input
@@ -2136,11 +2206,11 @@
 		{/if}
 	</div>
 
-	{#if warnings.length + ipamWarnings.length > 0}
+	{#if warnings.length + ipamWarnings.length + rackLayout.overlaps.length > 0}
 		<details class="warnings-panel">
-			<summary>Data warnings ({warnings.length + ipamWarnings.length})</summary>
+			<summary>Data warnings ({warnings.length + ipamWarnings.length + rackLayout.overlaps.length})</summary>
 			<ul>
-				{#each [...warnings, ...ipamWarnings] as warning (warning)}
+				{#each [...warnings, ...ipamWarnings, ...rackLayout.overlaps] as warning (warning)}
 					<li>{warning}</li>
 				{/each}
 			</ul>
@@ -2209,6 +2279,11 @@
 			<p class="icon-results-empty">No icons match your search.</p>
 		{/if}
 	</div>
+	<datalist id="rack-name-options">
+		{#each rackNames as rackName (rackName)}
+			<option value={rackName}></option>
+		{/each}
+	</datalist>
 	<datalist id="cable-type-options">
 		<option value="Cat5e"></option>
 		<option value="Cat6"></option>
@@ -2369,6 +2444,61 @@
 										: 0;
 								},
 								{ autosave: true }
+							)}
+					/>
+				</label>
+			</div>
+		</section>
+
+		<section class="edit-section">
+			<h4>Rack</h4>
+			<div class="field-row">
+				<label>
+					Rack Name
+					<input
+						type="text"
+						list="rack-name-options"
+						placeholder="Leave blank if not racked"
+						value={selectedMachine.rack?.name ?? ''}
+						on:change={(event) =>
+							updateRackField(
+								'machine',
+								selectedTarget.index,
+								'name',
+								(event.currentTarget as HTMLInputElement).value
+							)}
+					/>
+				</label>
+				<label>
+					Bottom U
+					<input
+						type="number"
+						min="1"
+						disabled={!selectedMachine.rack}
+						value={selectedMachine.rack?.unit ?? ''}
+						on:change={(event) =>
+							updateRackField(
+								'machine',
+								selectedTarget.index,
+								'unit',
+								(event.currentTarget as HTMLInputElement).value
+							)}
+					/>
+				</label>
+				<label>
+					Height (U)
+					<input
+						type="number"
+						min="1"
+						placeholder="1"
+						disabled={!selectedMachine.rack}
+						value={selectedMachine.rack?.heightU ?? ''}
+						on:change={(event) =>
+							updateRackField(
+								'machine',
+								selectedTarget.index,
+								'heightU',
+								(event.currentTarget as HTMLInputElement).value
 							)}
 					/>
 				</label>
@@ -2674,6 +2804,61 @@
 						)}
 				></textarea>
 			</label>
+		</section>
+
+		<section class="edit-section">
+			<h4>Rack</h4>
+			<div class="field-row">
+				<label>
+					Rack Name
+					<input
+						type="text"
+						list="rack-name-options"
+						placeholder="Leave blank if not racked"
+						value={selectedDevice.rack?.name ?? ''}
+						on:change={(event) =>
+							updateRackField(
+								'device',
+								selectedTarget.index,
+								'name',
+								(event.currentTarget as HTMLInputElement).value
+							)}
+					/>
+				</label>
+				<label>
+					Bottom U
+					<input
+						type="number"
+						min="1"
+						disabled={!selectedDevice.rack}
+						value={selectedDevice.rack?.unit ?? ''}
+						on:change={(event) =>
+							updateRackField(
+								'device',
+								selectedTarget.index,
+								'unit',
+								(event.currentTarget as HTMLInputElement).value
+							)}
+					/>
+				</label>
+				<label>
+					Height (U)
+					<input
+						type="number"
+						min="1"
+						placeholder="1"
+						disabled={!selectedDevice.rack}
+						value={selectedDevice.rack?.heightU ?? ''}
+						on:change={(event) =>
+							updateRackField(
+								'device',
+								selectedTarget.index,
+								'heightU',
+								(event.currentTarget as HTMLInputElement).value
+							)}
+					/>
+				</label>
+			</div>
 		</section>
 
 			<section class="edit-section">

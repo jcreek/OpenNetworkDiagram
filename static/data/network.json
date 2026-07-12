@@ -88,7 +88,11 @@
 						"port": "wan"
 					}
 				}
-			]
+			],
+			"rack": {
+				"name": "Lab Rack",
+				"unit": 10
+			}
 		},
 		{
 			"machineName": "Asustor NAS",
@@ -272,7 +276,12 @@
 						"port": "8"
 					}
 				}
-			]
+			],
+			"rack": {
+				"name": "Lab Rack",
+				"unit": 7,
+				"heightU": 2
+			}
 		},
 		{
 			"machineName": "AI Server",
@@ -310,7 +319,12 @@
 						"port": "9"
 					}
 				}
-			]
+			],
+			"rack": {
+				"name": "Lab Rack",
+				"unit": 4,
+				"heightU": 3
+			}
 		},
 		{
 			"machineName": "Immich Mini PC",
@@ -506,7 +520,11 @@
 					"portName": "24",
 					"speedGbps": 1
 				}
-			]
+			],
+			"rack": {
+				"name": "Lab Rack",
+				"unit": 12
+			}
 		},
 		{
 			"name": "WAN Uplink",
@@ -592,7 +610,12 @@
 					"portName": "port0",
 					"speedGbps": 1
 				}
-			]
+			],
+			"rack": {
+				"name": "Lab Rack",
+				"unit": 1,
+				"heightU": 2
+			}
 		},
 		{
 			"name": "Waveshare",

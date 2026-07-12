@@ -5,8 +5,9 @@
  * @typedef {{ portName: string; speedGbps?: number; macAddress?: string; connectedTo?: ConnectedTo }} Port
  * @typedef {{ name: string; role: string; ipAddress: string; iconKey?: string; macAddress?: string }} VM
  * @typedef {{ cpu: string; ram: string; networkPorts: number; networkPortSpeedGbps?: number; gpu?: string }} Hardware
- * @typedef {{ machineName: string; ipAddress: string; role: string; operatingSystem: string; iconKey?: string; notes?: string; software: { vms: VM[] }; hardware: Hardware; ports?: Port[] }} Machine
- * @typedef {{ name: string; ipAddress: string; type: string; iconKey?: string; notes?: string; ports?: Port[] }} NetworkDevice
+ * @typedef {{ name: string; unit: number; heightU?: number }} RackPlacement
+ * @typedef {{ machineName: string; ipAddress: string; role: string; operatingSystem: string; iconKey?: string; notes?: string; software: { vms: VM[] }; hardware: Hardware; ports?: Port[]; rack?: RackPlacement }} Machine
+ * @typedef {{ name: string; ipAddress: string; type: string; iconKey?: string; notes?: string; ports?: Port[]; rack?: RackPlacement }} NetworkDevice
  * @typedef {{ cidr: string; name?: string; vlanId?: number }} Subnet
  * @typedef {{ machines: Machine[]; devices: NetworkDevice[]; subnets?: Subnet[] }} NetworkData
  * @typedef {{ valid: boolean; errors: ValidationIssue[]; data?: NetworkData }} ValidationResult
@@ -167,6 +168,33 @@ export function normalizePort(issues, path, value, ownerLabel) {
 
 /**
  * @param {ValidationIssue[]} issues
+ * @param {string} path
+ * @param {unknown} value
+ * @returns {RackPlacement | undefined}
+ */
+function normalizeRack(issues, path, value) {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (!isRecord(value)) {
+		issues.push({ path, message: 'must be an object (rack placement)' });
+		return undefined;
+	}
+	const name = readString(issues, `${path}.name`, value.name);
+	const unit = readNumber(issues, `${path}.unit`, value.unit, { min: 1 });
+	const heightU = readNumber(issues, `${path}.heightU`, value.heightU, { optional: true, min: 1 });
+	if (!name || typeof unit !== 'number') {
+		return undefined;
+	}
+	return {
+		name,
+		unit,
+		...(typeof heightU === 'number' ? { heightU } : {})
+	};
+}
+
+/**
+ * @param {ValidationIssue[]} issues
  * @param {PortEntry[]} portEntries
  * @param {string} path
  * @param {string} ownerName
@@ -237,6 +265,7 @@ function normalizeMachine(issues, path, value) {
 	const operatingSystem = readString(issues, `${path}.operatingSystem`, value.operatingSystem);
 	const iconKey = readString(issues, `${path}.iconKey`, value.iconKey, { optional: true });
 	const notes = readString(issues, `${path}.notes`, value.notes, { optional: true, allowEmpty: true });
+	const rack = normalizeRack(issues, `${path}.rack`, value.rack);
 
 	const softwareRaw = value.software;
 	if (!isRecord(softwareRaw)) {
@@ -329,6 +358,7 @@ function normalizeMachine(issues, path, value) {
 		operatingSystem,
 		...(iconKey ? { iconKey } : {}),
 		...(notes !== undefined ? { notes } : {}),
+		...(rack ? { rack } : {}),
 		software: { vms },
 		hardware: {
 			cpu: hardware.cpu,
@@ -360,6 +390,7 @@ function normalizeDevice(issues, path, value) {
 	const type = readString(issues, `${path}.type`, value.type);
 	const notes = readString(issues, `${path}.notes`, value.notes, { optional: true, allowEmpty: true });
 	const iconKey = readString(issues, `${path}.iconKey`, value.iconKey, { optional: true });
+	const rack = normalizeRack(issues, `${path}.rack`, value.rack);
 
 	const portsRaw = value.ports;
 	if (portsRaw !== undefined && !Array.isArray(portsRaw)) {
@@ -387,6 +418,7 @@ function normalizeDevice(issues, path, value) {
 		type,
 		...(iconKey ? { iconKey } : {}),
 		...(notes !== undefined ? { notes } : {}),
+		...(rack ? { rack } : {}),
 		ports
 	};
 }

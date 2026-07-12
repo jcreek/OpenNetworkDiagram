@@ -17,6 +17,12 @@ export interface Port {
 	connectedTo?: ConnectedPortRef;
 }
 
+export interface RackPlacement {
+	name: string;
+	unit: number; // bottom U position, 1-based
+	heightU?: number; // defaults to 1
+}
+
 export interface Hardware {
 	cpu: string;
 	ram: string;
@@ -47,6 +53,7 @@ export interface Machine {
 	software: Software;
 	hardware: Hardware;
 	ports?: Port[];
+	rack?: RackPlacement;
 }
 
 export interface NetworkDevice {
@@ -56,6 +63,7 @@ export interface NetworkDevice {
 	iconKey?: string;
 	notes?: string;
 	ports?: Port[];
+	rack?: RackPlacement;
 }
 
 export interface Subnet {

@@ -42,6 +42,10 @@
 			"ipAddress": "192.168.1.2",
 			"type": "Network Switch",
 			"notes": "Optional notes",
+			"rack": {
+				"name": "Example Rack",
+				"unit": 12
+			},
 			"ports": [
 				{
 					"portName": "1",
