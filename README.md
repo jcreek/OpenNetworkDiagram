@@ -22,8 +22,13 @@ Open Network Diagram helps you document your infrastructure in a visual UI while
 
 - Network view with ethernet labels to make physical and logical links easy to read.
 - Non-network view for host-first inventory and service mapping.
+- Rack view: managed racks with U positions and heights, side-by-side shelf items, and click-through to the editor.
+- Node search that highlights matches by name, IP, role or OS and dims everything else.
+- IPAM panel: per-subnet utilization, duplicate-IP conflict detection, and next-free-IP suggestions when adding machines, devices or VMs.
+- Subnet and VLAN declarations, with nodes colour-coded by VLAN and a clickable legend filter.
+- Cable tracking on connections (type, colour, length) with colour-coded links and hover details.
 - Expandable VM lists per machine for quick virtualization visibility.
-- Modal editor for machines/devices with live diagram updates.
+- Modal editor for machines/devices with live diagram updates, notes and MAC address fields.
 - JSON-backed persistence with autosave in self-hosted mode.
 - Docker-first deployment with writable data volume support.
 - Optional read-only mode for public demos and safe sharing.
@@ -32,6 +37,8 @@ Open Network Diagram helps you document your infrastructure in a visual UI while
 ## Why Home Lab Users Use It
 
 - Keep an always-up-to-date map of machines, VMs, and devices.
+- Find a free IP and spot duplicate assignments without a spreadsheet.
+- Know exactly what's in your rack and where, down to the U.
 - Edit quickly through a modal UI instead of hand-editing large diagrams.
 - Persist everything to JSON so backups and Git workflows stay simple.
 - Stay fully self-hosted with no runtime dependency on external APIs.
@@ -77,6 +84,10 @@ docker rm open-network-diagram
 | Network view with ethernet labels                                          | Non-network view with VMs expanded                                          | Modal editing a machine                                          |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | ![Open Network Diagram network view with ethernet labels](screenshot1.png) | ![Open Network Diagram non-network view with VMs expanded](screenshot2.png) | ![Open Network Diagram modal editing a machine](screenshot3.png) |
+
+| IPAM panel with subnet utilization                                | Rack view with shelf items                             |
+| ------------------------------------------------------------------ | -------------------------------------------------------- |
+| ![Open Network Diagram IPAM panel with subnet utilization](screenshot4.png) | ![Open Network Diagram rack view with shelf items](screenshot5.png) |
 
 ## Docker Compose Option
 
@@ -151,25 +162,73 @@ Environment variables:
 			"ipAddress": "10.0.0.3",
 			"role": "Hypervisor",
 			"operatingSystem": "Proxmox",
+			"notes": "Primary router box.",
 			"software": {
-				"vms": [{ "name": "OpnSense", "role": "Router", "ipAddress": "10.0.0.4" }]
+				"vms": [
+					{
+						"name": "OpnSense",
+						"role": "Router",
+						"ipAddress": "10.0.0.4",
+						"macAddress": "bc:24:11:5a:2e:01"
+					}
+				]
 			},
 			"hardware": {
 				"cpu": "Intel N100",
 				"ram": "8GB",
 				"networkPorts": 4
-			}
+			},
+			"ports": [
+				{
+					"portName": "eth0",
+					"speedGbps": 1,
+					"connectedTo": {
+						"device": "Switch",
+						"port": "1",
+						"cable": { "type": "Cat6", "color": "blue", "lengthM": 1 }
+					}
+				}
+			],
+			"rack": { "name": "Lab Rack", "unit": 10 }
 		}
 	],
-	"devices": [{ "name": "Switch", "ipAddress": "10.0.0.2", "type": "Nintendo Switch" }]
+	"devices": [
+		{
+			"name": "Switch",
+			"ipAddress": "10.0.0.2",
+			"type": "Network Switch",
+			"ports": [
+				{
+					"portName": "1",
+					"speedGbps": 1,
+					"connectedTo": {
+						"device": "ProxRouter",
+						"port": "eth0",
+						"cable": { "type": "Cat6", "color": "blue", "lengthM": 1 }
+					}
+				}
+			],
+			"rack": { "name": "Lab Rack", "unit": 12 }
+		}
+	],
+	"subnets": [{ "cidr": "10.0.0.0/24", "name": "LAN", "vlanId": 1 }],
+	"racks": [{ "name": "Lab Rack", "heightU": 12 }]
 }
 ```
+
+Notes on the optional fields:
+
+- `subnets` powers the IPAM panel and VLAN colouring (`vlanId` is optional per subnet).
+- `racks` declares rack names and total units for the rack view; machines/devices opt in with a `rack` placement (`unit` is the bottom U, `heightU` defaults to 1). Items with the identical U range render side by side as shelf-mates.
+- `cable` on a `connectedTo` records type/colour/length and is kept identical on both ends automatically.
+- `notes` (machines and devices) and `macAddress` (ports and VMs) are free text.
 
 ### Project Structure
 
 ```text
 OpenNetworkDiagram/
 ├── src/                               # Svelte app source
+├── src/lib/shared/                    # Schema + persistence core (shared with server.mjs)
 ├── src/lib/config/vendorIconManifest.ts # Generated local icon catalog
 ├── static/data/network.json           # Demo dataset (Netlify)
 ├── static/icons/vendor/               # Vendored icon assets (runtime-local)
