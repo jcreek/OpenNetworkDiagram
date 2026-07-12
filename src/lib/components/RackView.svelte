@@ -14,7 +14,10 @@
 
 	function slotStyle(slot: RackSlot, rackHeightU: number): string {
 		const top = (rackHeightU - (slot.unit + slot.heightU - 1)) * unitHeightPx;
-		return `top: ${top}px; height: ${slot.heightU * unitHeightPx - 4}px;`;
+		const laneWidth = `(100% - 2.45rem) / ${slot.laneCount}`;
+		const left = `calc(2.1rem + (${laneWidth}) * ${slot.laneIndex})`;
+		const width = `calc(${laneWidth} - 4px)`;
+		return `top: ${top}px; height: ${slot.heightU * unitHeightPx - 4}px; left: ${left}; width: ${width};`;
 	}
 </script>
 
@@ -31,7 +34,7 @@
 		<div class="rack-columns">
 			{#each layout.racks as rack (rack.name)}
 				<div class="rack-column">
-					<h3>{rack.name}</h3>
+					<h3>{rack.name} <span class="rack-height-tag">{rack.heightU}U</span></h3>
 					<div class="rack-frame" style={`height: ${rack.heightU * unitHeightPx}px;`}>
 						{#each Array.from({ length: rack.heightU }, (_, i) => rack.heightU - i) as unit (unit)}
 							<div class="rack-unit-row" style={`height: ${unitHeightPx}px;`}>
@@ -76,7 +79,7 @@
 		position: absolute;
 		inset: 0;
 		overflow: auto;
-		padding: 6.5rem 1rem 1rem;
+		padding: 10rem 1rem 1rem;
 		background: var(--app-bg, transparent);
 	}
 
@@ -105,6 +108,12 @@
 		text-align: center;
 		font-size: 0.95rem;
 		color: var(--panel-contrast);
+	}
+
+	.rack-height-tag {
+		font-size: 0.7rem;
+		font-weight: 700;
+		color: var(--muted-text);
 	}
 
 	.rack-frame {
@@ -137,8 +146,6 @@
 
 	.rack-slot {
 		position: absolute;
-		left: 2.1rem;
-		right: 0.35rem;
 		margin-top: 2px;
 		display: flex;
 		align-items: center;

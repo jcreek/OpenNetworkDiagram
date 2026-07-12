@@ -556,7 +556,11 @@
 						"port": "11"
 					}
 				}
-			]
+			],
+			"rack": {
+				"name": "Lab Rack",
+				"unit": 3
+			}
 		},
 		{
 			"name": "3DS",
@@ -598,7 +602,11 @@
 						"port": "20"
 					}
 				}
-			]
+			],
+			"rack": {
+				"name": "Lab Rack",
+				"unit": 3
+			}
 		},
 		{
 			"name": "UPS Pi",
@@ -635,6 +643,12 @@
 			"cidr": "10.0.20.0/24",
 			"name": "IoT",
 			"vlanId": 20
+		}
+	],
+	"racks": [
+		{
+			"name": "Lab Rack",
+			"heightU": 12
 		}
 	]
 }

@@ -15,6 +15,7 @@
 		deletePort,
 		renameOwner,
 		renamePort,
+		renameRack,
 		setPortCable,
 		setPortConnection,
 		type OwnerKind,
@@ -165,6 +166,108 @@
 
 	$: rackLayout = buildRackLayout(networkData);
 	$: rackNames = knownRackNames(networkData);
+
+	let rackNewNameTarget: { kind: OwnerKind; index: number } | null = null;
+
+	function onRackSelectChange(kind: OwnerKind, index: number, value: string) {
+		if (value === '__new__') {
+			rackNewNameTarget = { kind, index };
+			return;
+		}
+		rackNewNameTarget = null;
+		updateRackField(kind, index, 'name', value);
+	}
+
+	function submitNewRackName(value: string) {
+		const target = rackNewNameTarget;
+		rackNewNameTarget = null;
+		const name = value.trim();
+		if (!target || !name) {
+			return;
+		}
+		mutateDraft(
+			(draft) => {
+				draft.racks ??= [];
+				if (!draft.racks.some((rack) => rack.name.toLowerCase() === name.toLowerCase())) {
+					draft.racks.push({ name });
+				}
+				const entity =
+					target.kind === 'machine' ? draft.machines[target.index] : draft.devices[target.index];
+				if (entity) {
+					entity.rack = {
+						name,
+						unit: entity.rack?.unit ?? 1,
+						...(entity.rack?.heightU ? { heightU: entity.rack.heightU } : {})
+					};
+				}
+			},
+			{ autosave: true }
+		);
+	}
+
+	function renameRackDefinition(previousName: string, nextName: string) {
+		if (!nextName.trim() || nextName.trim() === previousName) {
+			return;
+		}
+		applyDraft(renameRack(networkData, previousName, nextName));
+	}
+
+	function setRackHeightU(rackName: string, value: string) {
+		const parsed = Number(value);
+		mutateDraft(
+			(draft) => {
+				draft.racks ??= [];
+				let definition = draft.racks.find(
+					(rack) => rack.name.toLowerCase() === rackName.toLowerCase()
+				);
+				if (!definition) {
+					definition = { name: rackName };
+					draft.racks.push(definition);
+				}
+				if (value.trim() && Number.isInteger(parsed) && parsed >= 1) {
+					definition.heightU = parsed;
+				} else {
+					delete definition.heightU;
+				}
+			},
+			{ autosave: true }
+		);
+	}
+
+	function addRackDefinition() {
+		const existing = new Set(rackNames.map((name) => name.toLowerCase()));
+		let candidate = 'New Rack';
+		for (let index = 2; existing.has(candidate.toLowerCase()) && index < 100; index += 1) {
+			candidate = `New Rack ${index}`;
+		}
+		if (existing.has(candidate.toLowerCase())) {
+			return;
+		}
+		mutateDraft(
+			(draft) => {
+				draft.racks ??= [];
+				draft.racks.push({ name: candidate });
+			},
+			{ autosave: true }
+		);
+	}
+
+	function removeRackDefinition(rackName: string) {
+		mutateDraft(
+			(draft) => {
+				if (!draft.racks) {
+					return;
+				}
+				draft.racks = draft.racks.filter(
+					(rack) => rack.name.toLowerCase() !== rackName.toLowerCase()
+				);
+				if (draft.racks.length === 0) {
+					delete draft.racks;
+				}
+			},
+			{ autosave: true }
+		);
+	}
 
 	$: ipamReport = buildIpamReport(networkData);
 	$: ipamWarnings = ipamReport.duplicates.map(
@@ -1620,6 +1723,7 @@
 
 	function closeSelectedTargetModal() {
 		selectedTarget = null;
+		rackNewNameTarget = null;
 		clearIconSearch();
 	}
 
@@ -2011,7 +2115,50 @@
 				{/if}
 			</div>
 
-		{#if vlanLegend.length > 0}
+		{#if diagramViewMode === 'rack'}
+			<div class="racks-manager">
+				<h3>Racks</h3>
+				{#each rackLayout.racks as rack (rack.name)}
+					<div class="racks-manager-row">
+						<label>
+							Name
+							<input
+								type="text"
+								value={rack.name}
+								on:change={(event) =>
+									renameRackDefinition(rack.name, (event.currentTarget as HTMLInputElement).value)}
+							/>
+						</label>
+						<label>
+							Units
+							<input
+								type="number"
+								min="1"
+								placeholder={String(rack.heightU)}
+								value={rack.declaredHeightU ?? ''}
+								on:change={(event) =>
+									setRackHeightU(rack.name, (event.currentTarget as HTMLInputElement).value)}
+							/>
+						</label>
+						{#if rack.declared && rack.slots.length === 0}
+							<button
+								type="button"
+								class="danger"
+								title="Remove this empty rack"
+								on:click={() => removeRackDefinition(rack.name)}
+							>
+								Remove
+							</button>
+						{/if}
+					</div>
+				{/each}
+				<div class="inline-actions">
+					<button type="button" on:click={addRackDefinition}>Add Rack</button>
+				</div>
+			</div>
+		{/if}
+
+		{#if vlanLegend.length > 0 && diagramViewMode !== 'rack'}
 			<div class="vlan-legend" role="group" aria-label="VLAN legend">
 				{#each vlanLegend as entry (entry.vlanId)}
 					<button
@@ -2206,11 +2353,11 @@
 		{/if}
 	</div>
 
-	{#if warnings.length + ipamWarnings.length + rackLayout.overlaps.length > 0}
+	{#if warnings.length + ipamWarnings.length + rackLayout.warnings.length > 0}
 		<details class="warnings-panel">
-			<summary>Data warnings ({warnings.length + ipamWarnings.length + rackLayout.overlaps.length})</summary>
+			<summary>Data warnings ({warnings.length + ipamWarnings.length + rackLayout.warnings.length})</summary>
 			<ul>
-				{#each [...warnings, ...ipamWarnings, ...rackLayout.overlaps] as warning (warning)}
+				{#each [...warnings, ...ipamWarnings, ...rackLayout.warnings] as warning (warning)}
 					<li>{warning}</li>
 				{/each}
 			</ul>
@@ -2279,11 +2426,6 @@
 			<p class="icon-results-empty">No icons match your search.</p>
 		{/if}
 	</div>
-	<datalist id="rack-name-options">
-		{#each rackNames as rackName (rackName)}
-			<option value={rackName}></option>
-		{/each}
-	</datalist>
 	<datalist id="cable-type-options">
 		<option value="Cat5e"></option>
 		<option value="Cat6"></option>
@@ -2454,21 +2596,37 @@
 			<h4>Rack</h4>
 			<div class="field-row">
 				<label>
-					Rack Name
-					<input
-						type="text"
-						list="rack-name-options"
-						placeholder="Leave blank if not racked"
-						value={selectedMachine.rack?.name ?? ''}
+					Rack
+					<select
+						value={rackNewNameTarget?.kind === 'machine' &&
+						rackNewNameTarget?.index === selectedTarget.index
+							? '__new__'
+							: (selectedMachine.rack?.name ?? '')}
 						on:change={(event) =>
-							updateRackField(
+							onRackSelectChange(
 								'machine',
 								selectedTarget.index,
-								'name',
-								(event.currentTarget as HTMLInputElement).value
+								(event.currentTarget as HTMLSelectElement).value
 							)}
-					/>
+					>
+						<option value="">Not racked</option>
+						{#each rackNames as rackName (rackName)}
+							<option value={rackName}>{rackName}</option>
+						{/each}
+						<option value="__new__">New rack…</option>
+					</select>
 				</label>
+				{#if rackNewNameTarget?.kind === 'machine' && rackNewNameTarget?.index === selectedTarget.index}
+					<label>
+						New Rack Name
+						<input
+							type="text"
+							placeholder="e.g. Lab Rack"
+							on:change={(event) =>
+								submitNewRackName((event.currentTarget as HTMLInputElement).value)}
+						/>
+					</label>
+				{/if}
 				<label>
 					Bottom U
 					<input
@@ -2810,21 +2968,37 @@
 			<h4>Rack</h4>
 			<div class="field-row">
 				<label>
-					Rack Name
-					<input
-						type="text"
-						list="rack-name-options"
-						placeholder="Leave blank if not racked"
-						value={selectedDevice.rack?.name ?? ''}
+					Rack
+					<select
+						value={rackNewNameTarget?.kind === 'device' &&
+						rackNewNameTarget?.index === selectedTarget.index
+							? '__new__'
+							: (selectedDevice.rack?.name ?? '')}
 						on:change={(event) =>
-							updateRackField(
+							onRackSelectChange(
 								'device',
 								selectedTarget.index,
-								'name',
-								(event.currentTarget as HTMLInputElement).value
+								(event.currentTarget as HTMLSelectElement).value
 							)}
-					/>
+					>
+						<option value="">Not racked</option>
+						{#each rackNames as rackName (rackName)}
+							<option value={rackName}>{rackName}</option>
+						{/each}
+						<option value="__new__">New rack…</option>
+					</select>
 				</label>
+				{#if rackNewNameTarget?.kind === 'device' && rackNewNameTarget?.index === selectedTarget.index}
+					<label>
+						New Rack Name
+						<input
+							type="text"
+							placeholder="e.g. Lab Rack"
+							on:change={(event) =>
+								submitNewRackName((event.currentTarget as HTMLInputElement).value)}
+						/>
+					</label>
+				{/if}
 				<label>
 					Bottom U
 					<input
@@ -3409,6 +3583,79 @@
 	.map-controls button.active-toggle {
 		border-color: #3b82f6;
 		background: color-mix(in oklab, var(--panel-bg) 82%, #3b82f6 18%);
+	}
+
+	.racks-manager {
+		position: absolute;
+		left: 0.75rem;
+		bottom: 0.75rem;
+		z-index: 14;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
+		border: 1px solid var(--panel-border);
+		border-radius: 10px;
+		padding: 0.5rem 0.6rem;
+		max-width: min(80vw, 320px);
+		max-height: 50%;
+		overflow-y: auto;
+	}
+
+	.racks-manager h3 {
+		margin: 0 0 0.15rem;
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--muted-text);
+	}
+
+	.racks-manager-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 4.4rem auto;
+		gap: 0.35rem;
+		align-items: end;
+	}
+
+	.racks-manager-row label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		font-size: 0.66rem;
+		font-weight: 600;
+		color: var(--muted-text);
+	}
+
+	.racks-manager-row input {
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		border-radius: 6px;
+		padding: 0.25rem 0.35rem;
+		font-size: 0.76rem;
+		min-width: 0;
+	}
+
+	.racks-manager-row button {
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		border-radius: 6px;
+		padding: 0.25rem 0.4rem;
+		font-size: 0.72rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.racks-manager .inline-actions button {
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		border-radius: 7px;
+		padding: 0.3rem 0.5rem;
+		font-size: 0.76rem;
+		font-weight: 600;
+		cursor: pointer;
 	}
 
 	.vlan-legend {

@@ -9,7 +9,8 @@
  * @typedef {{ machineName: string; ipAddress: string; role: string; operatingSystem: string; iconKey?: string; notes?: string; software: { vms: VM[] }; hardware: Hardware; ports?: Port[]; rack?: RackPlacement }} Machine
  * @typedef {{ name: string; ipAddress: string; type: string; iconKey?: string; notes?: string; ports?: Port[]; rack?: RackPlacement }} NetworkDevice
  * @typedef {{ cidr: string; name?: string; vlanId?: number }} Subnet
- * @typedef {{ machines: Machine[]; devices: NetworkDevice[]; subnets?: Subnet[] }} NetworkData
+ * @typedef {{ name: string; heightU?: number }} RackDefinition
+ * @typedef {{ machines: Machine[]; devices: NetworkDevice[]; subnets?: Subnet[]; racks?: RackDefinition[] }} NetworkData
  * @typedef {{ valid: boolean; errors: ValidationIssue[]; data?: NetworkData }} ValidationResult
  * @typedef {{ allowEmpty?: boolean; optional?: boolean }} ReadStringOptions
  * @typedef {{ optional?: boolean; min?: number }} ReadNumberOptions
@@ -475,6 +476,28 @@ function normalizeSubnet(issues, path, value) {
 }
 
 /**
+ * @param {ValidationIssue[]} issues
+ * @param {string} path
+ * @param {unknown} value
+ * @returns {RackDefinition | null}
+ */
+function normalizeRackDefinition(issues, path, value) {
+	if (!isRecord(value)) {
+		issues.push({ path, message: 'must be an object (rack)' });
+		return null;
+	}
+	const name = readString(issues, `${path}.name`, value.name);
+	const heightU = readNumber(issues, `${path}.heightU`, value.heightU, { optional: true, min: 1 });
+	if (!name) {
+		return null;
+	}
+	return {
+		name,
+		...(typeof heightU === 'number' ? { heightU } : {})
+	};
+}
+
+/**
  * @param {unknown} value
  * @returns {ValidationResult}
  */
@@ -577,10 +600,38 @@ export function validateNetworkData(value) {
 		seenCidrs.add(subnet.cidr);
 	}
 
+	const racksRaw = value.racks;
+	const racksProvided = racksRaw !== undefined;
+	if (racksProvided && !Array.isArray(racksRaw)) {
+		issues.push({ path: '$.racks', message: 'must be an array when provided' });
+	}
+	const racks = [];
+	const rackEntries = [];
+	for (const [rackIndex, rackValue] of (Array.isArray(racksRaw) ? racksRaw : []).entries()) {
+		const rack = normalizeRackDefinition(issues, `$.racks[${rackIndex}]`, rackValue);
+		if (rack) {
+			racks.push(rack);
+			rackEntries.push({ rack, originalIndex: rackIndex });
+		}
+	}
+
+	const seenRackNames = new Set();
+	for (const { rack, originalIndex } of rackEntries) {
+		const key = rack.name.toLowerCase();
+		if (seenRackNames.has(key)) {
+			issues.push({
+				path: `$.racks[${originalIndex}].name`,
+				message: `duplicate rack name "${rack.name}"`
+			});
+		}
+		seenRackNames.add(key);
+	}
+
 	const data = {
 		machines,
 		devices,
-		...(subnetsProvided ? { subnets } : {})
+		...(subnetsProvided ? { subnets } : {}),
+		...(racksProvided ? { racks } : {})
 	};
 
 	return {

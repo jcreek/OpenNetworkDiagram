@@ -344,6 +344,42 @@ export function deletePort(
 	return cloned;
 }
 
+export function renameRack(data: NetworkData, previousName: string, nextName: string): NetworkData {
+	const cloned = cloneNetworkData(data);
+	const trimmed = nextName.trim();
+	if (!trimmed || equalsIgnoreCase(previousName, trimmed)) {
+		return cloned;
+	}
+
+	for (const machine of cloned.machines) {
+		if (machine.rack && equalsIgnoreCase(machine.rack.name, previousName)) {
+			machine.rack.name = trimmed;
+		}
+	}
+	for (const device of cloned.devices) {
+		if (device.rack && equalsIgnoreCase(device.rack.name, previousName)) {
+			device.rack.name = trimmed;
+		}
+	}
+	const definition = cloned.racks?.find((rack) => equalsIgnoreCase(rack.name, previousName));
+	if (definition) {
+		definition.name = trimmed;
+	}
+	// renaming onto an existing rack merges them; keep the first definition
+	if (cloned.racks) {
+		const seen = new Set<string>();
+		cloned.racks = cloned.racks.filter((rack) => {
+			const key = rack.name.toLowerCase();
+			if (seen.has(key)) {
+				return false;
+			}
+			seen.add(key);
+			return true;
+		});
+	}
+	return cloned;
+}
+
 export function setPortCable(
 	data: NetworkData,
 	kind: OwnerKind,

@@ -64,5 +64,11 @@
 			"name": "LAN",
 			"vlanId": 1
 		}
+	],
+	"racks": [
+		{
+			"name": "Example Rack",
+			"heightU": 24
+		}
 	]
 }

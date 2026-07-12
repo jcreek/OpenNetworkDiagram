@@ -72,8 +72,14 @@ export interface Subnet {
 	vlanId?: number;
 }
 
+export interface RackDefinition {
+	name: string;
+	heightU?: number;
+}
+
 export interface NetworkData {
 	machines: Machine[];
 	devices: NetworkDevice[];
 	subnets?: Subnet[];
+	racks?: RackDefinition[];
 }
