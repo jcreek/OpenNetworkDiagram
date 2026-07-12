@@ -1,6 +1,13 @@
+export interface CableInfo {
+	type?: string;
+	color?: string;
+	lengthM?: number;
+}
+
 export interface ConnectedPortRef {
 	device: string;
 	port: string;
+	cable?: CableInfo;
 }
 
 export interface Port {

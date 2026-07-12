@@ -8,6 +8,11 @@ export interface PortDetails {
 	connectedTo?: {
 		device: string;
 		port: string;
+		cable?: {
+			type?: string;
+			color?: string;
+			lengthM?: number;
+		};
 	};
 }
 
@@ -79,6 +84,10 @@ export interface GraphEdgeData {
 	targetPort?: string;
 	speedGbps?: number;
 	reciprocal?: boolean;
+	cableType?: string;
+	cableColorName?: string;
+	cableColor?: string;
+	cableLengthM?: number;
 }
 
 export interface GraphNodeElement {

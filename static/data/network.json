@@ -55,7 +55,12 @@
 					"macAddress": "84:47:09:1c:aa:10",
 					"connectedTo": {
 						"device": "Gigabit Switch",
-						"port": "1"
+						"port": "1",
+						"cable": {
+							"type": "Cat6",
+							"color": "blue",
+							"lengthM": 1
+						}
 					}
 				},
 				{
@@ -67,7 +72,12 @@
 					"speedGbps": 1,
 					"connectedTo": {
 						"device": "Gigabit Switch",
-						"port": "2"
+						"port": "2",
+						"cable": {
+							"type": "Cat6",
+							"color": "blue",
+							"lengthM": 1
+						}
 					}
 				},
 				{
@@ -101,7 +111,12 @@
 					"speedGbps": 1,
 					"connectedTo": {
 						"device": "Gigabit Switch",
-						"port": "3"
+						"port": "3",
+						"cable": {
+							"type": "Cat5e",
+							"color": "red",
+							"lengthM": 2
+						}
 					}
 				}
 			]
@@ -337,7 +352,12 @@
 					"speedGbps": 1,
 					"connectedTo": {
 						"device": "ProxRouter",
-						"port": "eth0"
+						"port": "eth0",
+						"cable": {
+							"type": "Cat6",
+							"color": "blue",
+							"lengthM": 1
+						}
 					}
 				},
 				{
@@ -345,7 +365,12 @@
 					"speedGbps": 1,
 					"connectedTo": {
 						"device": "ProxRouter",
-						"port": "eth2"
+						"port": "eth2",
+						"cable": {
+							"type": "Cat6",
+							"color": "blue",
+							"lengthM": 1
+						}
 					}
 				},
 				{
@@ -353,7 +378,12 @@
 					"speedGbps": 1,
 					"connectedTo": {
 						"device": "Asustor NAS",
-						"port": "eth0"
+						"port": "eth0",
+						"cable": {
+							"type": "Cat5e",
+							"color": "red",
+							"lengthM": 2
+						}
 					}
 				},
 				{

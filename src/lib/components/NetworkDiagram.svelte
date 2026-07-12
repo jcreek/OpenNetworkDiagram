@@ -15,6 +15,7 @@
 		deletePort,
 		renameOwner,
 		renamePort,
+		setPortCable,
 		setPortConnection,
 		type OwnerKind,
 		withReconciledConnections
@@ -25,7 +26,7 @@
 	import { validateNetworkData, type ValidationIssue } from '$lib/data/networkSchema';
 	import transformNetworkDataToGraph from '$lib/graph/transformNetworkData';
 	import { computeSearchMatches } from '$lib/graph/searchHighlight';
-	import type { GraphNodeData, GraphTransformResult } from '$lib/graph/types';
+	import type { GraphEdgeData, GraphNodeData, GraphTransformResult } from '$lib/graph/types';
 	import { themeMode, type ThemeMode } from '$lib/stores/theme';
 	import type { NetworkData, Port } from '$lib/types';
 	import Modal from './Modal.svelte';
@@ -569,6 +570,12 @@
 					'target-arrow-color': theme === 'dark' ? '#64748b' : '#94a3b8',
 					'font-size': 8,
 					color: theme === 'dark' ? '#94a3b8' : '#64748b'
+				}
+			},
+			{
+				selector: 'edge[cableColor]',
+				style: {
+					'line-color': 'data(cableColor)'
 				}
 			},
 			{
@@ -1417,6 +1424,31 @@
 		updateDevicePortConnection(deviceIndex, portIndex, next);
 	}
 
+	function updatePortCableField(
+		kind: OwnerKind,
+		ownerName: string,
+		port: Port,
+		field: 'type' | 'color' | 'lengthM',
+		value: string
+	) {
+		const current: NonNullable<NonNullable<Port['connectedTo']>['cable']> = {
+			...(port.connectedTo?.cable ?? {})
+		};
+		if (field === 'lengthM') {
+			const parsed = Number(value);
+			if (value.trim() && Number.isFinite(parsed) && parsed >= 0) {
+				current.lengthM = parsed;
+			} else {
+				delete current.lengthM;
+			}
+		} else if (value.trim()) {
+			current[field] = value.trim();
+		} else {
+			delete current[field];
+		}
+		applyDraft(setPortCable(networkData, kind, ownerName, port.portName, current));
+	}
+
 	function deleteMachine(machineIndex: number) {
 		const machine = networkData.machines[machineIndex];
 		if (!machine) {
@@ -1731,6 +1763,33 @@
 		});
 
 		cy.on('mouseout', 'node', () => {
+			tooltip.visible = false;
+		});
+
+		cy.on('mouseover', 'edge[kind = "physical"]', (event) => {
+			const edge = event.target;
+			const data = edge.data() as GraphEdgeData;
+			const parts = [
+				`${data.sourcePort ?? '?'} ↔ ${data.targetPort ?? '?'}`,
+				...(data.speedGbps ? [`${data.speedGbps}GbE`] : []),
+				...(data.cableType ? [data.cableType] : []),
+				...(data.cableColorName ? [data.cableColorName] : []),
+				...(typeof data.cableLengthM === 'number' ? [`${data.cableLengthM}m`] : [])
+			];
+			const midpoint = edge.renderedMidpoint();
+			const clampedPosition = clampTooltipPosition(
+				midpoint.x + tooltipOffset.x,
+				midpoint.y + tooltipOffset.y
+			);
+			tooltip = {
+				visible: true,
+				text: parts.join(' · '),
+				x: clampedPosition.x,
+				y: clampedPosition.y
+			};
+		});
+
+		cy.on('mouseout', 'edge', () => {
 			tooltip.visible = false;
 		});
 
@@ -2150,6 +2209,27 @@
 			<p class="icon-results-empty">No icons match your search.</p>
 		{/if}
 	</div>
+	<datalist id="cable-type-options">
+		<option value="Cat5e"></option>
+		<option value="Cat6"></option>
+		<option value="Cat6a"></option>
+		<option value="Cat7"></option>
+		<option value="Cat8"></option>
+		<option value="DAC"></option>
+		<option value="Fibre"></option>
+	</datalist>
+	<datalist id="cable-color-options">
+		<option value="blue"></option>
+		<option value="red"></option>
+		<option value="green"></option>
+		<option value="yellow"></option>
+		<option value="orange"></option>
+		<option value="purple"></option>
+		<option value="pink"></option>
+		<option value="white"></option>
+		<option value="grey"></option>
+		<option value="black"></option>
+	</datalist>
 	{#if selectedTarget?.type === 'machine' && selectedMachine}
 		<div class="inline-actions">
 			{#if selectedMachineHostId && selectedMachineVmCount > 0}
@@ -2452,6 +2532,57 @@
 								)}
 						/>
 					</label>
+					{#if port.connectedTo}
+						<label>
+							Cable Type
+							<input
+								type="text"
+								list="cable-type-options"
+								value={port.connectedTo.cable?.type ?? ''}
+								on:change={(event) =>
+									updatePortCableField(
+										'machine',
+										selectedMachine.machineName,
+										port,
+										'type',
+										(event.currentTarget as HTMLInputElement).value
+									)}
+							/>
+						</label>
+						<label>
+							Cable Colour
+							<input
+								type="text"
+								list="cable-color-options"
+								value={port.connectedTo.cable?.color ?? ''}
+								on:change={(event) =>
+									updatePortCableField(
+										'machine',
+										selectedMachine.machineName,
+										port,
+										'color',
+										(event.currentTarget as HTMLInputElement).value
+									)}
+							/>
+						</label>
+						<label>
+							Cable Length (m)
+							<input
+								type="number"
+								min="0"
+								step="0.5"
+								value={port.connectedTo.cable?.lengthM ?? ''}
+								on:change={(event) =>
+									updatePortCableField(
+										'machine',
+										selectedMachine.machineName,
+										port,
+										'lengthM',
+										(event.currentTarget as HTMLInputElement).value
+									)}
+							/>
+						</label>
+					{/if}
 					<div class="item-actions">
 						<button
 							type="button"
@@ -2628,6 +2759,57 @@
 								)}
 						/>
 					</label>
+					{#if port.connectedTo}
+						<label>
+							Cable Type
+							<input
+								type="text"
+								list="cable-type-options"
+								value={port.connectedTo.cable?.type ?? ''}
+								on:change={(event) =>
+									updatePortCableField(
+										'device',
+										selectedDevice.name,
+										port,
+										'type',
+										(event.currentTarget as HTMLInputElement).value
+									)}
+							/>
+						</label>
+						<label>
+							Cable Colour
+							<input
+								type="text"
+								list="cable-color-options"
+								value={port.connectedTo.cable?.color ?? ''}
+								on:change={(event) =>
+									updatePortCableField(
+										'device',
+										selectedDevice.name,
+										port,
+										'color',
+										(event.currentTarget as HTMLInputElement).value
+									)}
+							/>
+						</label>
+						<label>
+							Cable Length (m)
+							<input
+								type="number"
+								min="0"
+								step="0.5"
+								value={port.connectedTo.cable?.lengthM ?? ''}
+								on:change={(event) =>
+									updatePortCableField(
+										'device',
+										selectedDevice.name,
+										port,
+										'lengthM',
+										(event.currentTarget as HTMLInputElement).value
+									)}
+							/>
+						</label>
+					{/if}
 					<div class="item-actions">
 						<button
 							type="button"

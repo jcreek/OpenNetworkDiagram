@@ -57,6 +57,28 @@ function connectionKey(a: string, b: string): string {
 	return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
+const cableColorHex: Record<string, string> = {
+	blue: '#3b82f6',
+	red: '#ef4444',
+	green: '#22c55e',
+	yellow: '#eab308',
+	orange: '#f97316',
+	purple: '#a855f7',
+	pink: '#ec4899',
+	white: '#e2e8f0',
+	grey: '#94a3b8',
+	gray: '#94a3b8',
+	black: '#334155'
+};
+
+function resolveCableColor(name: string | undefined): string | undefined {
+	if (!name) {
+		return undefined;
+	}
+	const trimmed = name.trim();
+	return cableColorHex[trimmed.toLowerCase()] ?? (/^#[0-9a-fA-F]{3,8}$/.test(trimmed) ? trimmed : undefined);
+}
+
 function buildVlanResolver(subnets: Subnet[] | undefined) {
 	const vlanSubnets = (subnets ?? [])
 		.filter((subnet) => typeof subnet.vlanId === 'number')
@@ -315,6 +337,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 
 			physicalEdgeCounter += 1;
 			const speedGbps = edgeSpeed(port.speedGbps, targetPort.speedGbps);
+			const cable = port.connectedTo?.cable ?? targetPort.connectedTo?.cable;
 
 			edges.push({
 				data: {
@@ -326,7 +349,11 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 					sourcePort: port.portName,
 					targetPort: connectedTo.port,
 					speedGbps,
-					reciprocal
+					reciprocal,
+					...(cable?.type ? { cableType: cable.type } : {}),
+					...(cable?.color ? { cableColorName: cable.color } : {}),
+					...(resolveCableColor(cable?.color) ? { cableColor: resolveCableColor(cable?.color) } : {}),
+					...(typeof cable?.lengthM === 'number' ? { cableLengthM: cable.lengthM } : {})
 				}
 			});
 		}

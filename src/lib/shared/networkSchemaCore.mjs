@@ -1,6 +1,7 @@
 /**
  * @typedef {{ path: string; message: string }} ValidationIssue
- * @typedef {{ device: string; port: string }} ConnectedTo
+ * @typedef {{ type?: string; color?: string; lengthM?: number }} CableInfo
+ * @typedef {{ device: string; port: string; cable?: CableInfo }} ConnectedTo
  * @typedef {{ portName: string; speedGbps?: number; macAddress?: string; connectedTo?: ConnectedTo }} Port
  * @typedef {{ name: string; role: string; ipAddress: string; iconKey?: string; macAddress?: string }} VM
  * @typedef {{ cpu: string; ram: string; networkPorts: number; networkPortSpeedGbps?: number; gpu?: string }} Hardware
@@ -118,8 +119,36 @@ export function normalizePort(issues, path, value, ownerLabel) {
 		} else {
 			const device = readString(issues, `${path}.connectedTo.device`, value.connectedTo.device);
 			const port = readString(issues, `${path}.connectedTo.port`, value.connectedTo.port);
+			let cable;
+			const cableRaw = value.connectedTo.cable;
+			if (cableRaw !== undefined) {
+				if (!isRecord(cableRaw)) {
+					issues.push({ path: `${path}.connectedTo.cable`, message: 'must be an object' });
+				} else {
+					const cableType = readString(issues, `${path}.connectedTo.cable.type`, cableRaw.type, {
+						optional: true,
+						allowEmpty: true
+					});
+					const cableColor = readString(issues, `${path}.connectedTo.cable.color`, cableRaw.color, {
+						optional: true,
+						allowEmpty: true
+					});
+					const lengthM = readNumber(issues, `${path}.connectedTo.cable.lengthM`, cableRaw.lengthM, {
+						optional: true,
+						min: 0
+					});
+					const candidate = {
+						...(cableType ? { type: cableType } : {}),
+						...(cableColor ? { color: cableColor } : {}),
+						...(typeof lengthM === 'number' ? { lengthM } : {})
+					};
+					if (Object.keys(candidate).length > 0) {
+						cable = candidate;
+					}
+				}
+			}
 			if (device && port) {
-				connectedTo = { device, port };
+				connectedTo = { device, port, ...(cable ? { cable } : {}) };
 			}
 		}
 	}

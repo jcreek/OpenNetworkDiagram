@@ -1,4 +1,4 @@
-import type { Machine, NetworkData, NetworkDevice, Port, VM } from '../types';
+import type { CableInfo, Machine, NetworkData, NetworkDevice, Port, VM } from '../types';
 
 export type OwnerKind = 'machine' | 'device';
 
@@ -119,9 +119,10 @@ function ensureReciprocalConnections(data: NetworkData) {
 					continue;
 				}
 
-				const expectedReciprocal = {
+				const expectedReciprocal: Port['connectedTo'] = {
 					device: owner.name,
-					port: port.portName
+					port: port.portName,
+					...(port.connectedTo.cable ? { cable: deepClone(port.connectedTo.cable) } : {})
 				};
 				if (!targetPort.connectedTo) {
 					targetPort.connectedTo = expectedReciprocal;
@@ -132,6 +133,19 @@ function ensureReciprocalConnections(data: NetworkData) {
 					equalsIgnoreCase(targetPort.connectedTo.device, owner.name) &&
 					equalsIgnoreCase(targetPort.connectedTo.port, port.portName);
 				if (hasMatchingReciprocal) {
+					// keep cable metadata identical on both ends; the lexicographically
+					// smaller owner:port key is the canonical copy so the sync is deterministic
+					const ownKey = `${owner.name}:${port.portName}`.toLowerCase();
+					const targetKey = `${targetOwner.name}:${targetPort.portName}`.toLowerCase();
+					const [from, to] =
+						ownKey <= targetKey
+							? [port.connectedTo, targetPort.connectedTo]
+							: [targetPort.connectedTo, port.connectedTo];
+					if (from.cable) {
+						to.cable = deepClone(from.cable);
+					} else {
+						delete to.cable;
+					}
 					continue;
 				}
 			}
@@ -327,6 +341,47 @@ export function deletePort(
 			)
 	);
 	ensureReciprocalConnections(cloned);
+	return cloned;
+}
+
+export function setPortCable(
+	data: NetworkData,
+	kind: OwnerKind,
+	ownerName: string,
+	portName: string,
+	cable: CableInfo | undefined
+): NetworkData {
+	const cloned = cloneNetworkData(data);
+	const owner = findOwnerByKindAndName(cloned, kind, ownerName);
+	const port = owner ? findPort(owner, portName) : undefined;
+	if (!owner || !port?.connectedTo) {
+		return cloned;
+	}
+
+	const entries = Object.entries(cable ?? {}).filter(([, value]) =>
+		typeof value === 'number' ? Number.isFinite(value) : Boolean(value)
+	);
+	const normalized = entries.length > 0 ? (Object.fromEntries(entries) as CableInfo) : undefined;
+
+	if (normalized) {
+		port.connectedTo.cable = deepClone(normalized);
+	} else {
+		delete port.connectedTo.cable;
+	}
+
+	const peerOwner = findOwnerByName(cloned, port.connectedTo.device);
+	const peerPort = peerOwner ? findPort(peerOwner, port.connectedTo.port) : undefined;
+	if (
+		peerPort?.connectedTo &&
+		equalsIgnoreCase(peerPort.connectedTo.device, owner.name) &&
+		equalsIgnoreCase(peerPort.connectedTo.port, port.portName)
+	) {
+		if (normalized) {
+			peerPort.connectedTo.cable = deepClone(normalized);
+		} else {
+			delete peerPort.connectedTo.cable;
+		}
+	}
 	return cloned;
 }
 
