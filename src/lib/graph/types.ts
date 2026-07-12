@@ -64,6 +64,8 @@ export interface GraphNodeData {
 	nodeHeight?: number;
 	iconUrl?: string;
 	iconKey?: string;
+	vlanId?: number;
+	vlanColor?: string;
 	details?: GraphNodeDetails;
 }
 

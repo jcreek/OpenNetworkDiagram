@@ -1,5 +1,7 @@
-import type { ConnectedPortRef, NetworkData, Port } from '../types';
+import type { ConnectedPortRef, NetworkData, Port, Subnet } from '../types';
+import { cidrContains, parseCidr } from '../data/ipam';
 import { resolveIconPath } from '../config/iconRegistry';
+import { vlanColor } from './vlanPalette';
 import type { GraphEdgeElement, GraphNodeElement, GraphTransformResult } from './types';
 
 interface EndpointOwner {
@@ -55,6 +57,19 @@ function connectionKey(a: string, b: string): string {
 	return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
+function buildVlanResolver(subnets: Subnet[] | undefined) {
+	const vlanSubnets = (subnets ?? [])
+		.filter((subnet) => typeof subnet.vlanId === 'number')
+		.sort((a, b) => (parseCidr(b.cidr)?.prefix ?? 0) - (parseCidr(a.cidr)?.prefix ?? 0));
+	return (ip: string): { vlanId: number; vlanColor: string } | undefined => {
+		const home = vlanSubnets.find((subnet) => cidrContains(subnet.cidr, ip));
+		if (!home || typeof home.vlanId !== 'number') {
+			return undefined;
+		}
+		return { vlanId: home.vlanId, vlanColor: vlanColor(home.vlanId) };
+	};
+}
+
 function edgeSpeed(a: number | undefined, b: number | undefined): number | undefined {
 	if (typeof a === 'number' && typeof b === 'number') {
 		return Math.min(a, b);
@@ -82,6 +97,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 	> = {};
 	const ownersByLookup = new Map<string, EndpointOwner>();
 	const seenWarnings = new Set<string>();
+	const resolveVlan = buildVlanResolver(data.subnets);
 
 	const warn = (message: string) => {
 		if (!seenWarnings.has(message)) {
@@ -124,6 +140,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 				iconUrl: resolveIconPath(machine.iconKey),
 				nodeWidth: 200,
 				nodeHeight: 110,
+				...resolveVlan(machine.ipAddress),
 				details: {
 					type: 'machine',
 					name: machine.machineName,
@@ -162,6 +179,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 					iconUrl: resolveIconPath(vm.iconKey),
 					nodeWidth: 140,
 					nodeHeight: 66,
+					...resolveVlan(vm.ipAddress),
 					details: {
 						type: 'vm',
 						name: vm.name,
@@ -217,6 +235,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 				iconUrl: resolveIconPath(device.iconKey),
 				nodeWidth: 176,
 				nodeHeight: 116,
+				...resolveVlan(device.ipAddress),
 				details: {
 					type: 'device',
 					name: device.name,

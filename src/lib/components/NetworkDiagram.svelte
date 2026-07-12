@@ -21,6 +21,7 @@
 	} from '$lib/data/networkEditor';
 	import loadNetworkData from '$lib/data/loadNetworkData';
 	import { buildIpamReport, suggestNextFreeIp, type IpamReport } from '$lib/data/ipam';
+	import { vlanColor } from '$lib/graph/vlanPalette';
 	import { validateNetworkData, type ValidationIssue } from '$lib/data/networkSchema';
 	import transformNetworkDataToGraph from '$lib/graph/transformNetworkData';
 	import { computeSearchMatches } from '$lib/graph/searchHighlight';
@@ -84,6 +85,7 @@
 	let searchMatchCount = 0;
 	let lastTransformResult: GraphTransformResult | null = null;
 	let showIpamPanel = false;
+	let activeVlanFilter: number | null = null;
 	let machineVmIndex: GraphTransformResult['machineVmIndex'] = {};
 	let collapsedHosts: Record<string, boolean> = {};
 	let exportFileName = 'network-diagram';
@@ -136,6 +138,27 @@
 		);
 	});
 	$: visibleIconDefinitions = filteredIconDefinitions.slice(0, iconResultLimit);
+
+	$: vlanLegend = (() => {
+		const seen = new Set<number>();
+		const entries: Array<{ vlanId: number; label: string; color: string }> = [];
+		for (const subnet of networkData.subnets ?? []) {
+			if (typeof subnet.vlanId !== 'number' || seen.has(subnet.vlanId)) {
+				continue;
+			}
+			seen.add(subnet.vlanId);
+			entries.push({
+				vlanId: subnet.vlanId,
+				label: subnet.name ? `${subnet.name} (${subnet.cidr})` : subnet.cidr,
+				color: vlanColor(subnet.vlanId)
+			});
+		}
+		return entries.sort((a, b) => a.vlanId - b.vlanId);
+	})();
+	$: if (activeVlanFilter !== null && !vlanLegend.some((entry) => entry.vlanId === activeVlanFilter)) {
+		activeVlanFilter = null;
+		applyEmphasis();
+	}
 
 	$: ipamReport = buildIpamReport(networkData);
 	$: ipamWarnings = ipamReport.duplicates.map(
@@ -546,6 +569,13 @@
 					'target-arrow-color': theme === 'dark' ? '#64748b' : '#94a3b8',
 					'font-size': 8,
 					color: theme === 'dark' ? '#94a3b8' : '#64748b'
+				}
+			},
+			{
+				selector: 'node[vlanColor]',
+				style: {
+					'border-width': 4,
+					'border-color': 'data(vlanColor)'
 				}
 			},
 			{
@@ -976,16 +1006,18 @@
 				applyPhysicalEdgeDeconfliction(cy);
 				applyEthernetLabelVisibility(showEthernetLabels);
 			}
-			applySearchEmphasis();
+			applyEmphasis();
 			tooltip.visible = false;
 		}
 
-	function applySearchEmphasis() {
+	function applyEmphasis() {
 		if (!cy) {
 			return;
 		}
 
-		if (!searchQuery.trim()) {
+		const hasQuery = Boolean(searchQuery.trim());
+		const hasVlanFilter = activeVlanFilter !== null;
+		if (!hasQuery && !hasVlanFilter) {
 			cy.batch(() => {
 				cy?.elements().removeClass('dimmed search-match');
 			});
@@ -993,23 +1025,28 @@
 			return;
 		}
 
-		const matches = lastTransformResult
-			? computeSearchMatches(lastTransformResult, searchQuery)
-			: new Set<string>();
+		const searchMatches =
+			hasQuery && lastTransformResult
+				? computeSearchMatches(lastTransformResult, searchQuery)
+				: null;
+		const passing = new Set<string>();
 		let matchCount = 0;
 		cy.batch(() => {
 			for (const node of cy?.nodes().toArray() ?? []) {
-				const isMatch = matches.has(node.id());
-				node.toggleClass('search-match', isMatch);
-				node.toggleClass('dimmed', !isMatch);
-				if (isMatch) {
+				const matchesSearch = !searchMatches || searchMatches.has(node.id());
+				const matchesVlan = !hasVlanFilter || node.data('vlanId') === activeVlanFilter;
+				const passes = matchesSearch && matchesVlan;
+				node.toggleClass('search-match', Boolean(searchMatches) && passes);
+				node.toggleClass('dimmed', !passes);
+				if (passes) {
+					passing.add(node.id());
 					matchCount += 1;
 				}
 			}
 			for (const edge of cy?.edges().toArray() ?? []) {
-				const touchesMatch =
-					matches.has(String(edge.data('source'))) || matches.has(String(edge.data('target')));
-				edge.toggleClass('dimmed', !touchesMatch);
+				const touchesPassing =
+					passing.has(String(edge.data('source'))) || passing.has(String(edge.data('target')));
+				edge.toggleClass('dimmed', !touchesPassing);
 			}
 		});
 		searchMatchCount = matchCount;
@@ -1017,7 +1054,12 @@
 
 	function clearSearch() {
 		searchQuery = '';
-		applySearchEmphasis();
+		applyEmphasis();
+	}
+
+	function toggleVlanFilter(vlanId: number) {
+		activeVlanFilter = activeVlanFilter === vlanId ? null : vlanId;
+		applyEmphasis();
 	}
 
 	function revalidateDraft() {
@@ -1751,7 +1793,7 @@
 								placeholder="Find name, IP, role…"
 								aria-label="Search diagram nodes"
 								bind:value={searchQuery}
-								on:input={applySearchEmphasis}
+								on:input={applyEmphasis}
 							/>
 							{#if searchQuery.trim()}
 								<span class="search-count">{searchMatchCount}</span>
@@ -1839,6 +1881,23 @@
 					</div>
 				{/if}
 			</div>
+
+		{#if vlanLegend.length > 0}
+			<div class="vlan-legend" role="group" aria-label="VLAN legend">
+				{#each vlanLegend as entry (entry.vlanId)}
+					<button
+						type="button"
+						class="vlan-legend-item"
+						class:active={activeVlanFilter === entry.vlanId}
+						title={`Show only VLAN ${entry.vlanId}`}
+						on:click={() => toggleVlanFilter(entry.vlanId)}
+					>
+						<span class="vlan-swatch" style={`background: ${entry.color};`}></span>
+						VLAN {entry.vlanId} — {entry.label}
+					</button>
+				{/each}
+			</div>
+		{/if}
 
 		{#if showIpamPanel}
 			<div class="ipam-panel">
@@ -2983,6 +3042,52 @@
 	.map-controls button.active-toggle {
 		border-color: #3b82f6;
 		background: color-mix(in oklab, var(--panel-bg) 82%, #3b82f6 18%);
+	}
+
+	.vlan-legend {
+		position: absolute;
+		left: 0.75rem;
+		bottom: 0.75rem;
+		z-index: 14;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
+		border: 1px solid var(--panel-border);
+		border-radius: 10px;
+		padding: 0.45rem 0.55rem;
+		max-width: min(70vw, 300px);
+	}
+
+	.vlan-legend-item {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		border: 1px solid transparent;
+		background: transparent;
+		color: var(--panel-contrast);
+		font-size: 0.74rem;
+		font-weight: 600;
+		border-radius: 7px;
+		padding: 0.2rem 0.35rem;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.vlan-legend-item:hover {
+		border-color: var(--panel-border);
+	}
+
+	.vlan-legend-item.active {
+		border-color: #3b82f6;
+		background: color-mix(in oklab, var(--panel-bg) 82%, #3b82f6 18%);
+	}
+
+	.vlan-swatch {
+		width: 0.75rem;
+		height: 0.75rem;
+		border-radius: 3px;
+		flex-shrink: 0;
 	}
 
 	.ipam-panel {
