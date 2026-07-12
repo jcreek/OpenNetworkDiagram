@@ -51,7 +51,14 @@ export interface NetworkDevice {
 	ports?: Port[];
 }
 
+export interface Subnet {
+	cidr: string;
+	name?: string;
+	vlanId?: number;
+}
+
 export interface NetworkData {
 	machines: Machine[];
 	devices: NetworkDevice[];
+	subnets?: Subnet[];
 }

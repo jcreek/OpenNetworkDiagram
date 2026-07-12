@@ -571,5 +571,12 @@
 			"notes": "Port link not yet modeled.",
 			"ports": []
 		}
+	],
+	"subnets": [
+		{
+			"cidr": "10.0.0.0/24",
+			"name": "LAN",
+			"vlanId": 1
+		}
 	]
 }

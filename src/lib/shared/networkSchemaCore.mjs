@@ -6,7 +6,8 @@
  * @typedef {{ cpu: string; ram: string; networkPorts: number; networkPortSpeedGbps?: number; gpu?: string }} Hardware
  * @typedef {{ machineName: string; ipAddress: string; role: string; operatingSystem: string; iconKey?: string; notes?: string; software: { vms: VM[] }; hardware: Hardware; ports?: Port[] }} Machine
  * @typedef {{ name: string; ipAddress: string; type: string; iconKey?: string; notes?: string; ports?: Port[] }} NetworkDevice
- * @typedef {{ machines: Machine[]; devices: NetworkDevice[] }} NetworkData
+ * @typedef {{ cidr: string; name?: string; vlanId?: number }} Subnet
+ * @typedef {{ machines: Machine[]; devices: NetworkDevice[]; subnets?: Subnet[] }} NetworkData
  * @typedef {{ valid: boolean; errors: ValidationIssue[]; data?: NetworkData }} ValidationResult
  * @typedef {{ allowEmpty?: boolean; optional?: boolean }} ReadStringOptions
  * @typedef {{ optional?: boolean; min?: number }} ReadNumberOptions
@@ -361,6 +362,57 @@ function normalizeDevice(issues, path, value) {
 	};
 }
 
+const ipv4CidrPattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/;
+
+/**
+ * @param {string} cidr
+ * @returns {boolean}
+ */
+export function isValidIpv4Cidr(cidr) {
+	const match = ipv4CidrPattern.exec(cidr);
+	if (!match) {
+		return false;
+	}
+	const octets = match.slice(1, 5).map(Number);
+	const prefix = Number(match[5]);
+	return octets.every((octet) => octet <= 255) && prefix <= 32;
+}
+
+/**
+ * @param {ValidationIssue[]} issues
+ * @param {string} path
+ * @param {unknown} value
+ * @returns {Subnet | null}
+ */
+function normalizeSubnet(issues, path, value) {
+	if (!isRecord(value)) {
+		issues.push({ path, message: 'must be an object (subnet)' });
+		return null;
+	}
+
+	const cidr = readString(issues, `${path}.cidr`, value.cidr);
+	if (cidr && !isValidIpv4Cidr(cidr)) {
+		issues.push({ path: `${path}.cidr`, message: 'must be an IPv4 CIDR like "192.168.1.0/24"' });
+		return null;
+	}
+	const name = readString(issues, `${path}.name`, value.name, { optional: true, allowEmpty: true });
+	const vlanId = readNumber(issues, `${path}.vlanId`, value.vlanId, { optional: true, min: 1 });
+	if (typeof vlanId === 'number' && vlanId > 4094) {
+		issues.push({ path: `${path}.vlanId`, message: 'must be <= 4094' });
+		return null;
+	}
+
+	if (!cidr) {
+		return null;
+	}
+
+	return {
+		cidr,
+		...(name ? { name } : {}),
+		...(typeof vlanId === 'number' ? { vlanId } : {})
+	};
+}
+
 /**
  * @param {unknown} value
  * @returns {ValidationResult}
@@ -438,9 +490,36 @@ export function validateNetworkData(value) {
 		}
 	}
 
+	const subnetsRaw = value.subnets;
+	const subnetsProvided = subnetsRaw !== undefined;
+	if (subnetsProvided && !Array.isArray(subnetsRaw)) {
+		issues.push({ path: '$.subnets', message: 'must be an array when provided' });
+	}
+	const subnets = [];
+	const subnetEntries = [];
+	for (const [subnetIndex, subnetValue] of (Array.isArray(subnetsRaw) ? subnetsRaw : []).entries()) {
+		const subnet = normalizeSubnet(issues, `$.subnets[${subnetIndex}]`, subnetValue);
+		if (subnet) {
+			subnets.push(subnet);
+			subnetEntries.push({ subnet, originalIndex: subnetIndex });
+		}
+	}
+
+	const seenCidrs = new Set();
+	for (const { subnet, originalIndex } of subnetEntries) {
+		if (seenCidrs.has(subnet.cidr)) {
+			issues.push({
+				path: `$.subnets[${originalIndex}].cidr`,
+				message: `duplicate subnet CIDR "${subnet.cidr}"`
+			});
+		}
+		seenCidrs.add(subnet.cidr);
+	}
+
 	const data = {
 		machines,
-		devices
+		devices,
+		...(subnetsProvided ? { subnets } : {})
 	};
 
 	return {

@@ -20,6 +20,7 @@
 		withReconciledConnections
 	} from '$lib/data/networkEditor';
 	import loadNetworkData from '$lib/data/loadNetworkData';
+	import { buildIpamReport, suggestNextFreeIp, type IpamReport } from '$lib/data/ipam';
 	import { validateNetworkData, type ValidationIssue } from '$lib/data/networkSchema';
 	import transformNetworkDataToGraph from '$lib/graph/transformNetworkData';
 	import { computeSearchMatches } from '$lib/graph/searchHighlight';
@@ -82,6 +83,7 @@
 	let searchQuery = '';
 	let searchMatchCount = 0;
 	let lastTransformResult: GraphTransformResult | null = null;
+	let showIpamPanel = false;
 	let machineVmIndex: GraphTransformResult['machineVmIndex'] = {};
 	let collapsedHosts: Record<string, boolean> = {};
 	let exportFileName = 'network-diagram';
@@ -135,6 +137,19 @@
 	});
 	$: visibleIconDefinitions = filteredIconDefinitions.slice(0, iconResultLimit);
 
+	$: ipamReport = buildIpamReport(networkData);
+	$: ipamWarnings = ipamReport.duplicates.map(
+		(duplicate) => `Duplicate IP ${duplicate.ip}: assigned to ${duplicate.owners.join(' and ')}.`
+	);
+
+	function duplicateOwnersForIp(report: IpamReport, ip: string, selfLabel: string): string[] {
+		const entry = report.duplicates.find((duplicate) => duplicate.ip === ip.trim());
+		if (!entry) {
+			return [];
+		}
+		return entry.owners.filter((owner) => owner !== selfLabel);
+	}
+
 	$: selectedMachine =
 		selectedTarget?.type === 'machine' ? networkData.machines[selectedTarget.index] : null;
 	$: selectedDevice =
@@ -143,6 +158,20 @@
 		selectedTarget?.type === 'vm'
 			? networkData.machines[selectedTarget.machineIndex]?.software.vms[selectedTarget.vmIndex]
 			: null;
+	$: selectedMachineIpConflicts = selectedMachine
+		? duplicateOwnersForIp(ipamReport, selectedMachine.ipAddress, selectedMachine.machineName)
+		: [];
+	$: selectedDeviceIpConflicts = selectedDevice
+		? duplicateOwnersForIp(ipamReport, selectedDevice.ipAddress, selectedDevice.name)
+		: [];
+	$: selectedVmIpConflicts =
+		selectedVm && selectedTarget?.type === 'vm'
+			? duplicateOwnersForIp(
+					ipamReport,
+					selectedVm.ipAddress,
+					`${selectedVm.name} (VM on ${networkData.machines[selectedTarget.machineIndex]?.machineName ?? ''})`
+				)
+			: [];
 	$: selectedMachineHostId = selectedMachine ? toMachineNodeId(selectedMachine.machineName) : null;
 	$: selectedMachineVmCount =
 		selectedMachineHostId && machineVmIndex[selectedMachineHostId]
@@ -1380,6 +1409,7 @@
 			...createEmptyMachine(),
 			machineName: nextUniqueName('New Machine', existingNames)
 		};
+		newMachineDraft.ipAddress = suggestNextFreeIp(networkData) ?? newMachineDraft.ipAddress;
 		addModalKind = 'machine';
 	}
 
@@ -1389,7 +1419,45 @@
 			...createEmptyDevice(),
 			name: nextUniqueName('New Device', existingNames)
 		};
+		newDeviceDraft.ipAddress = suggestNextFreeIp(networkData) ?? newDeviceDraft.ipAddress;
 		addModalKind = 'device';
+	}
+
+	function suggestIpForAddModal() {
+		const suggested = suggestNextFreeIp(networkData);
+		if (!suggested) {
+			return;
+		}
+		if (addModalKind === 'machine') {
+			newMachineDraft.ipAddress = suggested;
+		} else if (addModalKind === 'device') {
+			newDeviceDraft.ipAddress = suggested;
+		}
+	}
+
+	function addDeclaredSubnet() {
+		const firstInferred = ipamReport.subnets.find((subnet) => !subnet.declared);
+		const existing = new Set((networkData.subnets ?? []).map((subnet) => subnet.cidr));
+		let cidr = firstInferred?.cidr ?? '192.168.1.0/24';
+		if (existing.has(cidr)) {
+			cidr = '192.168.1.0/24';
+		}
+		if (existing.has(cidr)) {
+			return;
+		}
+		mutateDraft((draft) => {
+			draft.subnets ??= [];
+			draft.subnets.push({ cidr });
+		});
+	}
+
+	function removeDeclaredSubnet(index: number) {
+		mutateDraft((draft) => {
+			draft.subnets?.splice(index, 1);
+			if (draft.subnets && draft.subnets.length === 0) {
+				delete draft.subnets;
+			}
+		});
 	}
 
 	function submitAddEntity() {
@@ -1728,6 +1796,13 @@
 							/>
 							<span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
 						</label>
+						<button
+							type="button"
+							class:active-toggle={showIpamPanel}
+							on:click={() => (showIpamPanel = !showIpamPanel)}
+						>
+							IPAM
+						</button>
 						<button type="button" on:click={() => (showExportModal = true)}>Export PNG</button>
 						<label class="toggle-control">
 							<span>Dark Mode</span>
@@ -1765,6 +1840,157 @@
 				{/if}
 			</div>
 
+		{#if showIpamPanel}
+			<div class="ipam-panel">
+				<div class="ipam-panel-head">
+					<h3>IP Address Management</h3>
+					<button
+						type="button"
+						class="ipam-close"
+						aria-label="Close IPAM panel"
+						on:click={() => (showIpamPanel = false)}
+					>
+						×
+					</button>
+				</div>
+
+				<section class="ipam-section">
+					<h4>Subnets</h4>
+					{#each ipamReport.subnets as subnet (subnet.cidr)}
+						<div class="ipam-subnet">
+							<div class="ipam-subnet-head">
+								<strong>{subnet.cidr}</strong>
+								{#if subnet.name}<span class="ipam-subnet-name">{subnet.name}</span>{/if}
+								{#if subnet.vlanId}<span class="ipam-badge">VLAN {subnet.vlanId}</span>{/if}
+								{#if !subnet.declared}<span class="ipam-badge inferred">inferred</span>{/if}
+							</div>
+							<div class="ipam-bar" role="presentation">
+								<div
+									class="ipam-bar-fill"
+									style={`width: ${Math.min(100, Math.round((subnet.used / Math.max(subnet.capacity, 1)) * 100))}%;`}
+								></div>
+							</div>
+							<div class="ipam-subnet-meta">
+								{subnet.used} of {subnet.capacity} in use
+								{#if suggestNextFreeIp(networkData, subnet.cidr)}
+									· next free: <code>{suggestNextFreeIp(networkData, subnet.cidr)}</code>
+								{/if}
+							</div>
+						</div>
+					{:else}
+						<p class="ipam-empty">No IPv4 addresses found yet.</p>
+					{/each}
+				</section>
+
+				{#if ipamReport.duplicates.length > 0}
+					<section class="ipam-section">
+						<h4>Conflicts</h4>
+						<ul class="ipam-conflicts">
+							{#each ipamReport.duplicates as duplicate (duplicate.ip)}
+								<li><code>{duplicate.ip}</code> — {duplicate.owners.join(', ')}</li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
+
+				{#if ipamReport.unparsed.length > 0}
+					<section class="ipam-section">
+						<h4>Not an IPv4 address</h4>
+						<ul class="ipam-unparsed">
+							{#each ipamReport.unparsed as assignment (`${assignment.ownerLabel}:${assignment.ip}`)}
+								<li>{assignment.ownerLabel}: <code>{assignment.ip}</code></li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
+
+				<section class="ipam-section">
+					<h4>Declared subnets</h4>
+					{#each networkData.subnets ?? [] as subnet, subnetIndex (`${subnet.cidr}:${subnetIndex}`)}
+						<div class="ipam-subnet-editor">
+							<label>
+								CIDR
+								<input
+									type="text"
+									value={subnet.cidr}
+									on:change={(event) =>
+										mutateDraft(
+											(draft) => {
+												if (draft.subnets?.[subnetIndex]) {
+													draft.subnets[subnetIndex].cidr = (
+														event.currentTarget as HTMLInputElement
+													).value;
+												}
+											},
+											{ autosave: true }
+										)}
+								/>
+							</label>
+							<label>
+								Name
+								<input
+									type="text"
+									value={subnet.name ?? ''}
+									on:change={(event) =>
+										mutateDraft(
+											(draft) => {
+												const nextName = (event.currentTarget as HTMLInputElement).value.trim();
+												if (draft.subnets?.[subnetIndex]) {
+													if (nextName) {
+														draft.subnets[subnetIndex].name = nextName;
+													} else {
+														delete draft.subnets[subnetIndex].name;
+													}
+												}
+											},
+											{ autosave: true }
+										)}
+								/>
+							</label>
+							<label>
+								VLAN
+								<input
+									type="number"
+									min="1"
+									max="4094"
+									value={subnet.vlanId ?? ''}
+									on:change={(event) =>
+										mutateDraft(
+											(draft) => {
+												const parsed = Number((event.currentTarget as HTMLInputElement).value);
+												if (draft.subnets?.[subnetIndex]) {
+													if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 4094) {
+														draft.subnets[subnetIndex].vlanId = parsed;
+													} else {
+														delete draft.subnets[subnetIndex].vlanId;
+													}
+												}
+											},
+											{ autosave: true }
+										)}
+								/>
+							</label>
+							<button
+								type="button"
+								class="danger"
+								aria-label={`Remove subnet ${subnet.cidr}`}
+								on:click={() => removeDeclaredSubnet(subnetIndex)}
+							>
+								Remove
+							</button>
+						</div>
+					{:else}
+						<p class="ipam-empty">
+							None declared; subnets above are inferred as /24 from the IPs in use.
+						</p>
+					{/each}
+					<div class="inline-actions">
+						<button type="button" on:click={addDeclaredSubnet}>Declare Subnet</button>
+					</div>
+				</section>
+			</div>
+		{/if}
+
 		<div class="data-source">Source: {dataSourceLabel}</div>
 		<div class="status-chip" class:error={saveState === 'error'}>
 			{saveStateLabel()}
@@ -1792,11 +2018,11 @@
 		{/if}
 	</div>
 
-	{#if warnings.length > 0}
+	{#if warnings.length + ipamWarnings.length > 0}
 		<details class="warnings-panel">
-			<summary>Data warnings ({warnings.length})</summary>
+			<summary>Data warnings ({warnings.length + ipamWarnings.length})</summary>
 			<ul>
-				{#each warnings as warning (warning)}
+				{#each [...warnings, ...ipamWarnings] as warning (warning)}
 					<li>{warning}</li>
 				{/each}
 			</ul>
@@ -1898,6 +2124,9 @@
 							{ autosave: true }
 						)}
 				/>
+				{#if selectedMachineIpConflicts.length > 0}
+					<span class="ip-conflict-hint">Also used by {selectedMachineIpConflicts.join(', ')}</span>
+				{/if}
 			</label>
 			<label>
 				Role
@@ -2019,7 +2248,8 @@
 								name: nextUniqueName(
 									'New VM',
 									draft.machines[selectedTarget.index].software.vms.map((vm) => vm.name)
-								)
+								),
+								ipAddress: suggestNextFreeIp(draft) ?? createEmptyVm().ipAddress
 							});
 						})}
 				>
@@ -2219,6 +2449,9 @@
 							{ autosave: true }
 						)}
 				/>
+				{#if selectedDeviceIpConflicts.length > 0}
+					<span class="ip-conflict-hint">Also used by {selectedDeviceIpConflicts.join(', ')}</span>
+				{/if}
 			</label>
 			<label>
 				Type
@@ -2415,6 +2648,9 @@
 							{ autosave: true }
 						)}
 				/>
+				{#if selectedVmIpConflicts.length > 0}
+					<span class="ip-conflict-hint">Also used by {selectedVmIpConflicts.join(', ')}</span>
+				{/if}
 			</label>
 			<label>
 				MAC Address
@@ -2503,7 +2739,10 @@
 			</label>
 			<label>
 				IP Address
-				<input type="text" bind:value={newMachineDraft.ipAddress} />
+				<span class="ip-suggest-row">
+					<input type="text" bind:value={newMachineDraft.ipAddress} />
+					<button type="button" on:click={suggestIpForAddModal}>Suggest</button>
+				</span>
 			</label>
 			<label>
 				Role
@@ -2526,7 +2765,10 @@
 			</label>
 			<label>
 				IP Address
-				<input type="text" bind:value={newDeviceDraft.ipAddress} />
+				<span class="ip-suggest-row">
+					<input type="text" bind:value={newDeviceDraft.ipAddress} />
+					<button type="button" on:click={suggestIpForAddModal}>Suggest</button>
+				</span>
 			</label>
 			<label>
 				Type
@@ -2736,6 +2978,211 @@
 		line-height: 1;
 		padding: 0 0.15rem;
 		cursor: pointer;
+	}
+
+	.map-controls button.active-toggle {
+		border-color: #3b82f6;
+		background: color-mix(in oklab, var(--panel-bg) 82%, #3b82f6 18%);
+	}
+
+	.ipam-panel {
+		position: absolute;
+		right: 0.75rem;
+		bottom: 0.75rem;
+		z-index: 15;
+		width: min(88vw, 360px);
+		max-height: min(72%, 620px);
+		overflow-y: auto;
+		background: color-mix(in oklab, var(--panel-bg) 96%, transparent 4%);
+		border: 1px solid var(--panel-border);
+		border-radius: 10px;
+		padding: 0.7rem 0.8rem;
+		color: var(--panel-contrast);
+		box-shadow: 0 8px 24px rgba(15, 23, 42, 0.24);
+	}
+
+	.ipam-panel-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 0.4rem;
+	}
+
+	.ipam-panel-head h3 {
+		margin: 0;
+		font-size: 0.92rem;
+	}
+
+	.ipam-close {
+		border: none;
+		background: transparent;
+		color: var(--panel-contrast);
+		font-size: 1.2rem;
+		font-weight: 700;
+		line-height: 1;
+		cursor: pointer;
+		padding: 0 0.2rem;
+	}
+
+	.ipam-section {
+		margin-top: 0.7rem;
+	}
+
+	.ipam-section h4 {
+		margin: 0 0 0.4rem;
+		font-size: 0.78rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--muted-text);
+	}
+
+	.ipam-subnet {
+		margin-bottom: 0.6rem;
+	}
+
+	.ipam-subnet-head {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.82rem;
+		flex-wrap: wrap;
+	}
+
+	.ipam-subnet-name {
+		color: var(--muted-text);
+		font-size: 0.78rem;
+		font-weight: 600;
+	}
+
+	.ipam-badge {
+		font-size: 0.66rem;
+		font-weight: 700;
+		border: 1px solid #3b82f6;
+		color: #3b82f6;
+		border-radius: 999px;
+		padding: 0.05rem 0.4rem;
+	}
+
+	.ipam-badge.inferred {
+		border-color: var(--panel-border);
+		color: var(--muted-text);
+	}
+
+	.ipam-bar {
+		height: 0.4rem;
+		border-radius: 999px;
+		background: color-mix(in oklab, var(--panel-bg) 70%, var(--panel-border) 30%);
+		margin: 0.25rem 0;
+		overflow: hidden;
+	}
+
+	.ipam-bar-fill {
+		height: 100%;
+		border-radius: 999px;
+		background: #3b82f6;
+		min-width: 2px;
+	}
+
+	.ipam-subnet-meta {
+		font-size: 0.74rem;
+		color: var(--muted-text);
+	}
+
+	.ipam-subnet-meta code,
+	.ipam-conflicts code,
+	.ipam-unparsed code {
+		font-size: 0.74rem;
+	}
+
+	.ipam-conflicts,
+	.ipam-unparsed {
+		margin: 0;
+		padding-left: 1.1rem;
+		font-size: 0.78rem;
+	}
+
+	.ipam-conflicts li {
+		color: #dc2626;
+		margin-bottom: 0.2rem;
+	}
+
+	.ipam-unparsed li {
+		margin-bottom: 0.2rem;
+	}
+
+	.ipam-empty {
+		margin: 0 0 0.4rem;
+		font-size: 0.76rem;
+		color: var(--muted-text);
+	}
+
+	.ipam-subnet-editor {
+		display: grid;
+		grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 3.6rem auto;
+		gap: 0.35rem;
+		align-items: end;
+		margin-bottom: 0.45rem;
+	}
+
+	.ipam-subnet-editor label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		font-size: 0.68rem;
+		font-weight: 600;
+		color: var(--muted-text);
+	}
+
+	.ipam-subnet-editor input {
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		border-radius: 6px;
+		padding: 0.25rem 0.35rem;
+		font-size: 0.76rem;
+		min-width: 0;
+	}
+
+	.ipam-subnet-editor button {
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		border-radius: 6px;
+		padding: 0.25rem 0.4rem;
+		font-size: 0.72rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.ip-conflict-hint {
+		display: block;
+		margin-top: 0.2rem;
+		font-size: 0.74rem;
+		font-weight: 600;
+		color: #dc2626;
+	}
+
+	.ip-suggest-row {
+		display: flex;
+		gap: 0.4rem;
+		align-items: center;
+	}
+
+	.ip-suggest-row input {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.ip-suggest-row button {
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		border-radius: 7px;
+		padding: 0.35rem 0.55rem;
+		font-size: 0.76rem;
+		font-weight: 600;
+		cursor: pointer;
+		white-space: nowrap;
 	}
 
 	.select-control {
