@@ -22,6 +22,7 @@
 	import loadNetworkData from '$lib/data/loadNetworkData';
 	import { validateNetworkData, type ValidationIssue } from '$lib/data/networkSchema';
 	import transformNetworkDataToGraph from '$lib/graph/transformNetworkData';
+	import { computeSearchMatches } from '$lib/graph/searchHighlight';
 	import type { GraphNodeData, GraphTransformResult } from '$lib/graph/types';
 	import { themeMode, type ThemeMode } from '$lib/stores/theme';
 	import type { NetworkData, Port } from '$lib/types';
@@ -78,6 +79,9 @@
 
 	let showEthernetLabels = false;
 	let diagramViewMode: DiagramViewMode = 'network';
+	let searchQuery = '';
+	let searchMatchCount = 0;
+	let lastTransformResult: GraphTransformResult | null = null;
 	let machineVmIndex: GraphTransformResult['machineVmIndex'] = {};
 	let collapsedHosts: Record<string, boolean> = {};
 	let exportFileName = 'network-diagram';
@@ -514,6 +518,25 @@
 					'font-size': 8,
 					color: theme === 'dark' ? '#94a3b8' : '#64748b'
 				}
+			},
+			{
+				selector: 'node.search-match',
+				style: {
+					'border-width': 4,
+					'border-color': '#f59e0b'
+				}
+			},
+			{
+				selector: 'node.dimmed',
+				style: {
+					opacity: 0.15
+				}
+			},
+			{
+				selector: 'edge.dimmed',
+				style: {
+					opacity: 0.1
+				}
 			}
 		];
 	}
@@ -910,6 +933,7 @@
 		}
 
 		const transformed = transformNetworkDataToGraph(networkData);
+		lastTransformResult = transformed;
 		machineVmIndex = transformed.machineVmIndex;
 		syncCollapsedHosts(machineVmIndex);
 		const visible = buildVisibleElements(transformed);
@@ -923,8 +947,49 @@
 				applyPhysicalEdgeDeconfliction(cy);
 				applyEthernetLabelVisibility(showEthernetLabels);
 			}
+			applySearchEmphasis();
 			tooltip.visible = false;
 		}
+
+	function applySearchEmphasis() {
+		if (!cy) {
+			return;
+		}
+
+		if (!searchQuery.trim()) {
+			cy.batch(() => {
+				cy?.elements().removeClass('dimmed search-match');
+			});
+			searchMatchCount = 0;
+			return;
+		}
+
+		const matches = lastTransformResult
+			? computeSearchMatches(lastTransformResult, searchQuery)
+			: new Set<string>();
+		let matchCount = 0;
+		cy.batch(() => {
+			for (const node of cy?.nodes().toArray() ?? []) {
+				const isMatch = matches.has(node.id());
+				node.toggleClass('search-match', isMatch);
+				node.toggleClass('dimmed', !isMatch);
+				if (isMatch) {
+					matchCount += 1;
+				}
+			}
+			for (const edge of cy?.edges().toArray() ?? []) {
+				const touchesMatch =
+					matches.has(String(edge.data('source'))) || matches.has(String(edge.data('target')));
+				edge.toggleClass('dimmed', !touchesMatch);
+			}
+		});
+		searchMatchCount = matchCount;
+	}
+
+	function clearSearch() {
+		searchQuery = '';
+		applySearchEmphasis();
+	}
 
 	function revalidateDraft() {
 		const validation = validateNetworkData(networkData);
@@ -1612,6 +1677,27 @@
 					<button type="button" class="controls-toggle" on:click={toggleMapControls}>Show Controls</button>
 				{:else}
 					<div class="map-controls">
+						<div class="search-control">
+							<input
+								type="text"
+								placeholder="Find name, IP, role…"
+								aria-label="Search diagram nodes"
+								bind:value={searchQuery}
+								on:input={applySearchEmphasis}
+							/>
+							{#if searchQuery.trim()}
+								<span class="search-count">{searchMatchCount}</span>
+								<button
+									type="button"
+									class="search-clear"
+									aria-label="Clear search"
+									title="Clear search"
+									on:click={clearSearch}
+								>
+									×
+								</button>
+							{/if}
+						</div>
 						<button type="button" on:click={loadData} disabled={isLoadingData}>Reload JSON</button>
 						<button type="button" on:click={addMachine}>Add Machine</button>
 						<button type="button" on:click={addDevice}>Add Device</button>
@@ -2538,6 +2624,55 @@
 
 	.map-controls select {
 		min-width: 13.5rem;
+	}
+
+	.search-control {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		border: 1px solid var(--panel-border);
+		background: var(--panel-bg);
+		color: var(--panel-contrast);
+		padding: 0.2rem 0.35rem;
+		border-radius: 7px;
+	}
+
+	.search-control input {
+		border: none;
+		background: transparent;
+		color: var(--panel-contrast);
+		font-size: 0.8rem;
+		font-weight: 600;
+		width: 10.5rem;
+		outline: none;
+	}
+
+	.search-control input::placeholder {
+		color: color-mix(in oklab, var(--panel-contrast) 55%, transparent 45%);
+		font-weight: 500;
+	}
+
+	.search-control:focus-within {
+		border-color: #60a5fa;
+	}
+
+	.search-count {
+		font-size: 0.72rem;
+		font-weight: 700;
+		color: #f59e0b;
+		min-width: 1.1rem;
+		text-align: center;
+	}
+
+	.search-clear {
+		border: none;
+		background: transparent;
+		color: var(--panel-contrast);
+		font-size: 0.95rem;
+		font-weight: 700;
+		line-height: 1;
+		padding: 0 0.15rem;
+		cursor: pointer;
 	}
 
 	.select-control {
