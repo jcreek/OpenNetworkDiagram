@@ -21,7 +21,7 @@ Open Network Diagram helps you document your infrastructure in a visual UI while
 ## Features
 
 - Network view with ethernet labels to make physical and logical links easy to read.
-- Non-network view for host-first inventory and service mapping.
+- Hosts & VMs view for host-first inventory and service mapping.
 - Rack view: managed racks with U positions and heights, side-by-side shelf items, and click-through to the editor.
 - Node search that highlights matches by name, IP, role or OS and dims everything else.
 - IPAM panel: per-subnet utilization, duplicate-IP conflict detection, and next-free-IP suggestions when adding machines, devices or VMs.
@@ -81,13 +81,13 @@ docker rm open-network-diagram
 
 ## What It Looks Like
 
-| Network view with ethernet labels                                          | Non-network view with VMs expanded                                          | Modal editing a machine                                          |
+| Network view with ethernet labels                                          | Hosts & VMs view with VMs expanded                                          | Modal editing a machine                                          |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| ![Open Network Diagram network view with ethernet labels](screenshot1.png) | ![Open Network Diagram non-network view with VMs expanded](screenshot2.png) | ![Open Network Diagram modal editing a machine](screenshot3.png) |
+| ![Open Network Diagram network view with ethernet labels](screenshot1.png) | ![Open Network Diagram Hosts & VMs view with VMs expanded](screenshot2.png) | ![Open Network Diagram modal editing a machine](screenshot3.png) |
 
-| IPAM panel with subnet utilization                                          | Rack view with shelf items                                          |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| ![Open Network Diagram IPAM panel with subnet utilization](screenshot4.png) | ![Open Network Diagram rack view with shelf items](screenshot5.png) |
+| IPAM panel with subnet utilization                                          | Rack view with shelf items                                          | Dark mode                                          |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
+| ![Open Network Diagram IPAM panel with subnet utilization](screenshot4.png) | ![Open Network Diagram rack view with shelf items](screenshot5.png) | ![Open Network Diagram dark mode](screenshot6.png) |
 
 ## Docker Compose Option
 
