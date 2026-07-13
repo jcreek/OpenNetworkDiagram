@@ -5,3 +5,8 @@ yarn.lock
 bun.lock
 bun.lockb
 src/lib/config/vendorIconManifest.ts
+
+# Design handoff bundles (prototypes, not code)
+new-design/
+claude-design/
+homelab-hub-main/

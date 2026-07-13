@@ -1,30 +1,99 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
+/* Design tokens from the UX review (new-design/project/UX Review.dc.html, panel 1b).
+   Principle: calm chrome, loud data. */
 :root {
-	--app-bg: #e2e8f0;
-	--panel-bg: #f8fafc;
-	--panel-border: #cbd5e1;
-	--panel-contrast: #0f172a;
-	--muted-text: #334155;
-	--chip-bg: #e2e8f0;
-	--chip-text: #0f172a;
-	--modal-overlay: rgba(15, 23, 42, 0.58);
+	/* Core colours */
+	--bg-canvas: #eef0f3;
+	--surface: #ffffff;
+	--surface-2: #f2f4f7;
+	--border: #dce0e6;
+	--text: #1b212b;
+	--text-2: #616a78;
+	--accent: #3565c4;
+	--danger: #c03d38;
+
+	/* Graph canvas tokens (plain hex — read via getComputedStyle for Cytoscape) */
+	--graph-edge: #8b94a3;
+	--graph-node-border: #c6ccd4;
+	--graph-infra-fill: #3a4250;
+	--graph-infra-border: #2b323d;
+	--graph-dumb-border: #b3bac4;
+	--graph-edge-chip-bg: #ffffff;
+	--graph-edge-chip-text: #3a4250;
+
+	/* VLAN categorical set — equal lightness/chroma so no VLAN shouts louder */
+	--vlan-0: oklch(0.55 0.13 290);
+	--vlan-1: oklch(0.55 0.13 15);
+	--vlan-2: oklch(0.55 0.13 175);
+	--vlan-3: oklch(0.55 0.13 75);
+	--vlan-4: oklch(0.55 0.13 240);
+	--vlan-5: oklch(0.55 0.13 125);
+
+	/* Type */
+	--font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+	/* Shape & elevation */
+	--radius-control: 6px;
+	--radius-panel: 10px;
+	--radius-modal: 14px;
+	--control-h: 32px;
+	--shadow-panel: 0 4px 16px rgb(0 0 0 / 0.08);
+	--shadow-popover: 0 8px 24px rgb(0 0 0 / 0.12);
+	--modal-overlay: rgb(15 18 24 / 0.45);
+
+	/* Status */
+	--status-ok: #2e7d4f;
+	--status-warn: #b0782f;
+
+	/* Legacy aliases (older selectors still reference these) */
+	--app-bg: var(--bg-canvas);
+	--panel-bg: var(--surface);
+	--panel-border: var(--border);
+	--panel-contrast: var(--text);
+	--muted-text: var(--text-2);
+	--chip-bg: var(--surface-2);
+	--chip-text: var(--text);
 }
 
 :root[data-theme='dark'] {
-	--app-bg: #0b1220;
-	--panel-bg: #111827;
-	--panel-border: #334155;
-	--panel-contrast: #e2e8f0;
-	--muted-text: #94a3b8;
-	--chip-bg: #1e293b;
-	--chip-text: #e2e8f0;
-	--modal-overlay: rgba(2, 6, 23, 0.78);
+	--bg-canvas: #14171c;
+	--surface: #1d222a;
+	--surface-2: #262d38;
+	--border: #363f4d;
+	--text: #e7ebf2;
+	--text-2: #9aa4b2;
+	--accent: #7da5e8;
+	--danger: #e0716c;
+
+	--graph-edge: #5b6575;
+	--graph-node-border: #363f4d;
+	--graph-infra-fill: #2c3440;
+	--graph-infra-border: #414c5d;
+	--graph-dumb-border: #414c5d;
+	--graph-edge-chip-bg: #262d38;
+	--graph-edge-chip-text: #c3cad4;
+
+	--vlan-0: oklch(0.68 0.13 290);
+	--vlan-1: oklch(0.68 0.13 15);
+	--vlan-2: oklch(0.68 0.13 175);
+	--vlan-3: oklch(0.68 0.13 75);
+	--vlan-4: oklch(0.68 0.13 240);
+	--vlan-5: oklch(0.68 0.13 125);
+
+	--shadow-panel: 0 4px 16px rgb(0 0 0 / 0.35);
+	--shadow-popover: 0 8px 24px rgb(0 0 0 / 0.45);
+	--modal-overlay: rgb(8 10 14 / 0.6);
+
+	--status-ok: #5cb884;
+	--status-warn: #f0b429;
 }
 
 html,
 body {
 	background: var(--app-bg);
 	color: var(--panel-contrast);
+	font-family: var(--font-sans);
 }

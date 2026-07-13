@@ -85,8 +85,8 @@ docker rm open-network-diagram
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | ![Open Network Diagram network view with ethernet labels](screenshot1.png) | ![Open Network Diagram non-network view with VMs expanded](screenshot2.png) | ![Open Network Diagram modal editing a machine](screenshot3.png) |
 
-| IPAM panel with subnet utilization                                | Rack view with shelf items                             |
-| ------------------------------------------------------------------ | -------------------------------------------------------- |
+| IPAM panel with subnet utilization                                          | Rack view with shelf items                                          |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | ![Open Network Diagram IPAM panel with subnet utilization](screenshot4.png) | ![Open Network Diagram rack view with shelf items](screenshot5.png) |
 
 ## Docker Compose Option

@@ -135,10 +135,15 @@ export function normalizePort(issues, path, value, ownerLabel) {
 						optional: true,
 						allowEmpty: true
 					});
-					const lengthM = readNumber(issues, `${path}.connectedTo.cable.lengthM`, cableRaw.lengthM, {
-						optional: true,
-						min: 0
-					});
+					const lengthM = readNumber(
+						issues,
+						`${path}.connectedTo.cable.lengthM`,
+						cableRaw.lengthM,
+						{
+							optional: true,
+							min: 0
+						}
+					);
 					const candidate = {
 						...(cableType ? { type: cableType } : {}),
 						...(cableColor ? { color: cableColor } : {}),
@@ -265,7 +270,10 @@ function normalizeMachine(issues, path, value) {
 	const role = readString(issues, `${path}.role`, value.role);
 	const operatingSystem = readString(issues, `${path}.operatingSystem`, value.operatingSystem);
 	const iconKey = readString(issues, `${path}.iconKey`, value.iconKey, { optional: true });
-	const notes = readString(issues, `${path}.notes`, value.notes, { optional: true, allowEmpty: true });
+	const notes = readString(issues, `${path}.notes`, value.notes, {
+		optional: true,
+		allowEmpty: true
+	});
 	const rack = normalizeRack(issues, `${path}.rack`, value.rack);
 
 	const softwareRaw = value.software;
@@ -304,8 +312,16 @@ function normalizeMachine(issues, path, value) {
 		issues.push({ path: `${path}.hardware`, message: 'must be an object' });
 	}
 	const hardware = {
-		cpu: readString(issues, `${path}.hardware.cpu`, isRecord(hardwareRaw) ? hardwareRaw.cpu : undefined),
-		ram: readString(issues, `${path}.hardware.ram`, isRecord(hardwareRaw) ? hardwareRaw.ram : undefined),
+		cpu: readString(
+			issues,
+			`${path}.hardware.cpu`,
+			isRecord(hardwareRaw) ? hardwareRaw.cpu : undefined
+		),
+		ram: readString(
+			issues,
+			`${path}.hardware.ram`,
+			isRecord(hardwareRaw) ? hardwareRaw.ram : undefined
+		),
 		networkPorts: readNumber(
 			issues,
 			`${path}.hardware.networkPorts`,
@@ -318,10 +334,15 @@ function normalizeMachine(issues, path, value) {
 			isRecord(hardwareRaw) ? hardwareRaw.networkPortSpeedGbps : undefined,
 			{ optional: true, min: 0 }
 		),
-		gpu: readString(issues, `${path}.hardware.gpu`, isRecord(hardwareRaw) ? hardwareRaw.gpu : undefined, {
-			optional: true,
-			allowEmpty: true
-		})
+		gpu: readString(
+			issues,
+			`${path}.hardware.gpu`,
+			isRecord(hardwareRaw) ? hardwareRaw.gpu : undefined,
+			{
+				optional: true,
+				allowEmpty: true
+			}
+		)
 	};
 
 	const portsRaw = value.ports;
@@ -389,7 +410,10 @@ function normalizeDevice(issues, path, value) {
 	const name = readString(issues, `${path}.name`, value.name);
 	const ipAddress = readString(issues, `${path}.ipAddress`, value.ipAddress);
 	const type = readString(issues, `${path}.type`, value.type);
-	const notes = readString(issues, `${path}.notes`, value.notes, { optional: true, allowEmpty: true });
+	const notes = readString(issues, `${path}.notes`, value.notes, {
+		optional: true,
+		allowEmpty: true
+	});
 	const iconKey = readString(issues, `${path}.iconKey`, value.iconKey, { optional: true });
 	const rack = normalizeRack(issues, `${path}.rack`, value.rack);
 
@@ -523,7 +547,10 @@ export function validateNetworkData(value) {
 
 	const machines = [];
 	const machineEntries = [];
-	for (const [machineIndex, machineValue] of (Array.isArray(machinesRaw) ? machinesRaw : []).entries()) {
+	for (const [machineIndex, machineValue] of (Array.isArray(machinesRaw)
+		? machinesRaw
+		: []
+	).entries()) {
 		const machine = normalizeMachine(issues, `$.machines[${machineIndex}]`, machineValue);
 		if (machine) {
 			machines.push(machine);
@@ -533,7 +560,10 @@ export function validateNetworkData(value) {
 
 	const devices = [];
 	const deviceEntries = [];
-	for (const [deviceIndex, deviceValue] of (Array.isArray(devicesRaw) ? devicesRaw : []).entries()) {
+	for (const [deviceIndex, deviceValue] of (Array.isArray(devicesRaw)
+		? devicesRaw
+		: []
+	).entries()) {
 		const device = normalizeDevice(issues, `$.devices[${deviceIndex}]`, deviceValue);
 		if (device) {
 			devices.push(device);
@@ -581,7 +611,10 @@ export function validateNetworkData(value) {
 	}
 	const subnets = [];
 	const subnetEntries = [];
-	for (const [subnetIndex, subnetValue] of (Array.isArray(subnetsRaw) ? subnetsRaw : []).entries()) {
+	for (const [subnetIndex, subnetValue] of (Array.isArray(subnetsRaw)
+		? subnetsRaw
+		: []
+	).entries()) {
 		const subnet = normalizeSubnet(issues, `$.subnets[${subnetIndex}]`, subnetValue);
 		if (subnet) {
 			subnets.push(subnet);
