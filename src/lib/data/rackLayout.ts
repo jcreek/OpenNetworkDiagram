@@ -21,10 +21,18 @@ export interface RackColumn {
 	slots: RackSlot[];
 }
 
+export interface UnrackedEntity {
+	kind: 'machine' | 'device';
+	name: string;
+	iconKey?: string;
+	subtitle: string;
+}
+
 export interface RackLayout {
 	racks: RackColumn[];
 	warnings: string[];
 	unrackedCount: number;
+	unracked: UnrackedEntity[];
 }
 
 const minimumRackHeightU = 12;
@@ -112,7 +120,7 @@ function assignLanes(slots: RackSlot[], rackName: string, warnings: string[]) {
 export function buildRackLayout(data: NetworkData): RackLayout {
 	const slotsByRack = new Map<string, RackSlot[]>();
 	const canonicalNames = new Map<string, string>();
-	let unrackedCount = 0;
+	const unracked: UnrackedEntity[] = [];
 
 	const canonical = (rawName: string): string => {
 		const trimmed = rawName.trim();
@@ -149,7 +157,12 @@ export function buildRackLayout(data: NetworkData): RackLayout {
 
 	for (const [index, machine] of data.machines.entries()) {
 		if (!machine.rack?.name) {
-			unrackedCount += 1;
+			unracked.push({
+				kind: 'machine',
+				name: machine.machineName,
+				iconKey: machine.iconKey,
+				subtitle: machine.role
+			});
 			continue;
 		}
 		place(
@@ -167,7 +180,12 @@ export function buildRackLayout(data: NetworkData): RackLayout {
 	}
 	for (const [index, device] of data.devices.entries()) {
 		if (!device.rack?.name) {
-			unrackedCount += 1;
+			unracked.push({
+				kind: 'device',
+				name: device.name,
+				iconKey: device.iconKey,
+				subtitle: device.type
+			});
 			continue;
 		}
 		place(
@@ -216,7 +234,7 @@ export function buildRackLayout(data: NetworkData): RackLayout {
 			};
 		});
 
-	return { racks, warnings, unrackedCount };
+	return { racks, warnings, unrackedCount: unracked.length, unracked };
 }
 
 export function knownRackNames(data: NetworkData): string[] {

@@ -1,8 +1,15 @@
 import type { ConnectedPortRef, NetworkData, Port, Subnet } from '../types';
 import { cidrContains, parseCidr } from '../data/ipam';
 import { resolveIconPath } from '../config/iconRegistry';
-import { vlanColor } from './vlanPalette';
-import type { GraphEdgeElement, GraphNodeElement, GraphTransformResult } from './types';
+import { buildVlanIndexMap } from './vlanPalette';
+import {
+	NODE_DIMENSIONS,
+	estimatePillWidth,
+	type DeviceClass,
+	type GraphEdgeElement,
+	type GraphNodeElement,
+	type GraphTransformResult
+} from './types';
 
 interface EndpointOwner {
 	kind: 'machine' | 'device';
@@ -76,20 +83,34 @@ function resolveCableColor(name: string | undefined): string | undefined {
 		return undefined;
 	}
 	const trimmed = name.trim();
-	return cableColorHex[trimmed.toLowerCase()] ?? (/^#[0-9a-fA-F]{3,8}$/.test(trimmed) ? trimmed : undefined);
+	return (
+		cableColorHex[trimmed.toLowerCase()] ??
+		(/^#[0-9a-fA-F]{3,8}$/.test(trimmed) ? trimmed : undefined)
+	);
 }
 
 function buildVlanResolver(subnets: Subnet[] | undefined) {
 	const vlanSubnets = (subnets ?? [])
 		.filter((subnet) => typeof subnet.vlanId === 'number')
 		.sort((a, b) => (parseCidr(b.cidr)?.prefix ?? 0) - (parseCidr(a.cidr)?.prefix ?? 0));
-	return (ip: string): { vlanId: number; vlanColor: string } | undefined => {
+	const vlanIndexById = buildVlanIndexMap(subnets);
+	return (ip: string): { vlanId: number; vlanIndex: number } | undefined => {
 		const home = vlanSubnets.find((subnet) => cidrContains(subnet.cidr, ip));
 		if (!home || typeof home.vlanId !== 'number') {
 			return undefined;
 		}
-		return { vlanId: home.vlanId, vlanColor: vlanColor(home.vlanId) };
+		return { vlanId: home.vlanId, vlanIndex: vlanIndexById.get(home.vlanId) ?? 0 };
 	};
+}
+
+// Devices whose type reads as network infrastructure get the dark "infra"
+// treatment on the map; everything else (consoles, peripherals, UPSes) is an
+// unmanaged "dumb" device rendered as a dashed pill.
+const infrastructureTypePattern =
+	/switch|router|firewall|gateway|access\s?point|\bap\b|wan|isp|modem|dns|patch\s?panel/i;
+
+export function classifyDevice(type: string | undefined): DeviceClass {
+	return type && infrastructureTypePattern.test(type) ? 'infrastructure' : 'dumb';
 }
 
 function edgeSpeed(a: number | undefined, b: number | undefined): number | undefined {
@@ -154,14 +175,16 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 
 		nodes.push({
 			data: {
-					id: machineNodeId,
-					label: machine.machineName,
-					rawName: machine.machineName,
-					kind: 'machine',
+				id: machineNodeId,
+				label: machine.machineName,
+				rawName: machine.machineName,
+				kind: 'machine',
 				iconKey: machine.iconKey,
 				iconUrl: resolveIconPath(machine.iconKey),
-				nodeWidth: 200,
-				nodeHeight: 110,
+				nodeWidth: NODE_DIMENSIONS.machine.width,
+				nodeHeight: NODE_DIMENSIONS.machine.height,
+				meta: machine.ipAddress,
+				vmCount: sourceMachineVms.length,
 				...resolveVlan(machine.ipAddress),
 				details: {
 					type: 'machine',
@@ -199,8 +222,9 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 					hostMachineId: machineNodeId,
 					iconKey: vm.iconKey,
 					iconUrl: resolveIconPath(vm.iconKey),
-					nodeWidth: 140,
-					nodeHeight: 66,
+					nodeWidth: NODE_DIMENSIONS.vm.width,
+					nodeHeight: NODE_DIMENSIONS.vm.height,
+					meta: vm.ipAddress,
 					...resolveVlan(vm.ipAddress),
 					details: {
 						type: 'vm',
@@ -221,8 +245,7 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 					id: hostingEdgeId,
 					source: machineNodeId,
 					target: vmNodeId,
-					kind: 'hosting',
-					label: 'hosts'
+					kind: 'hosting'
 				}
 			});
 
@@ -246,6 +269,15 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 	for (const device of data.devices) {
 		const deviceNodeId = toDeviceNodeId(device.name);
 		const devicePorts = [...(device.ports ?? [])];
+		const deviceClass = classifyDevice(device.type);
+		const portsInUse = devicePorts.filter((port) => parseConnectedTo(port.connectedTo)).length;
+		let deviceMeta: string | undefined;
+		if (deviceClass === 'infrastructure') {
+			deviceMeta =
+				devicePorts.length > 0
+					? `${devicePorts.length} ${devicePorts.length === 1 ? 'port' : 'ports'} · ${portsInUse} in use`
+					: device.ipAddress;
+		}
 
 		nodes.push({
 			data: {
@@ -253,10 +285,18 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 				label: device.name,
 				rawName: device.name,
 				kind: 'device',
+				deviceClass,
 				iconKey: device.iconKey,
 				iconUrl: resolveIconPath(device.iconKey),
-				nodeWidth: 176,
-				nodeHeight: 116,
+				nodeWidth:
+					deviceClass === 'infrastructure'
+						? NODE_DIMENSIONS.infrastructure.width
+						: estimatePillWidth(device.name),
+				nodeHeight:
+					deviceClass === 'infrastructure'
+						? NODE_DIMENSIONS.infrastructure.height
+						: NODE_DIMENSIONS.dumbHeight,
+				...(deviceMeta ? { meta: deviceMeta } : {}),
 				...resolveVlan(device.ipAddress),
 				details: {
 					type: 'device',
@@ -339,20 +379,34 @@ export default function transformNetworkDataToGraph(data: NetworkData): GraphTra
 			const speedGbps = edgeSpeed(port.speedGbps, targetPort.speedGbps);
 			const cable = port.connectedTo?.cable ?? targetPort.connectedTo?.cable;
 
+			// One chip per cable: interface name (prefer the machine side —
+			// "eth0" reads better than "port 3") plus speed, with the network
+			// default of 1GbE omitted so only exceptions are informative.
+			const ifname =
+				owner.kind !== 'machine' && targetOwner.kind === 'machine'
+					? connectedTo.port
+					: port.portName;
+			const chipLabelNoSpeed = ifname;
+			const chipLabel =
+				typeof speedGbps === 'number' && speedGbps !== 1 ? `${ifname} · ${speedGbps}GbE` : ifname;
+
 			edges.push({
 				data: {
 					id: `physical:${physicalEdgeCounter}`,
 					source: owner.nodeId,
 					target: targetOwner.nodeId,
 					kind: 'physical',
-					label: speedGbps ? `${speedGbps}GbE` : undefined,
+					chipLabel,
+					chipLabelNoSpeed,
 					sourcePort: port.portName,
 					targetPort: connectedTo.port,
 					speedGbps,
 					reciprocal,
 					...(cable?.type ? { cableType: cable.type } : {}),
 					...(cable?.color ? { cableColorName: cable.color } : {}),
-					...(resolveCableColor(cable?.color) ? { cableColor: resolveCableColor(cable?.color) } : {}),
+					...(resolveCableColor(cable?.color)
+						? { cableColor: resolveCableColor(cable?.color) }
+						: {}),
 					...(typeof cable?.lengthM === 'number' ? { cableLengthM: cable.lengthM } : {})
 				}
 			});

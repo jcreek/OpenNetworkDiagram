@@ -32,14 +32,23 @@
 	<div class="modal-backdrop" on:click={onBackdropClick}>
 		<div class="modal-container" style={`max-width: ${maxWidth}`}>
 			<header class="modal-header">
-				{#if title}
-					<h2>{title}</h2>
-				{/if}
-				<button type="button" class="close-button" on:click={closeModal} aria-label="Close">×</button>
+				<slot name="header">
+					{#if title}
+						<h2>{title}</h2>
+					{/if}
+				</slot>
+				<button type="button" class="close-button" on:click={closeModal} aria-label="Close"
+					>×</button
+				>
 			</header>
 			<div class="modal-body">
 				<slot />
 			</div>
+			{#if $$slots.footer}
+				<footer class="modal-footer-bar">
+					<slot name="footer" />
+				</footer>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -61,47 +70,62 @@
 		max-height: 90vh;
 		display: flex;
 		flex-direction: column;
-		background: var(--panel-bg);
-		border: 1px solid var(--panel-border);
-		border-radius: 12px;
-		box-shadow: 0 24px 48px rgba(15, 23, 42, 0.24);
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-modal);
+		box-shadow: 0 24px 64px rgb(15 18 24 / 0.35);
+		overflow: hidden;
 	}
 
 	.modal-header {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 0.5rem;
-		padding: 0.9rem 1rem;
-		border-bottom: 1px solid var(--panel-border);
+		gap: 14px;
+		padding: 16px 20px;
+		border-bottom: 1px solid var(--border);
+		flex-shrink: 0;
 	}
 
 	.modal-header h2 {
 		margin: 0;
-		font-size: 1.05rem;
-		color: var(--panel-contrast);
+		flex: 1;
+		font-size: 20px;
+		font-weight: 600;
+		color: var(--text);
 	}
 
 	.close-button {
-		border: 1px solid transparent;
+		border: none;
 		background: transparent;
-		color: var(--muted-text);
-		font-size: 1.7rem;
+		color: var(--text-2);
+		font-size: 1.5rem;
 		line-height: 1;
-		width: 2rem;
-		height: 2rem;
-		border-radius: 8px;
+		width: 30px;
+		height: 30px;
+		border-radius: var(--radius-control);
 		cursor: pointer;
+		flex-shrink: 0;
+		margin-left: auto;
 	}
 
 	.close-button:hover {
-		background: var(--chip-bg);
-		color: var(--panel-contrast);
+		background: var(--surface-2);
+		color: var(--text);
 	}
 
 	.modal-body {
-		padding: 1rem;
+		padding: 20px;
 		overflow: auto;
+	}
+
+	.modal-footer-bar {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 12px 20px;
+		border-top: 1px solid var(--border);
+		background: var(--surface-2);
+		flex-shrink: 0;
 	}
 
 	@media (max-width: 720px) {

@@ -14,6 +14,9 @@ importers:
       cytoscape-dagre:
         specifier: ^2.5.0
         version: 2.5.0(cytoscape@3.33.1)
+      html-to-image:
+        specifier: ^1.11.13
+        version: 1.11.13
     devDependencies:
       '@eslint/compat':
         specifier: ^1.2.5
@@ -76,11 +79,11 @@ importers:
         specifier: ^3.8.1
         version: 3.8.1
       prettier-plugin-svelte:
-        specifier: ^3.3.3
-        version: 3.3.3(prettier@3.8.1)(svelte@5.25.8)
+        specifier: ^4.1.1
+        version: 4.1.1(prettier@3.8.1)(svelte@5.25.8)
       prettier-plugin-tailwindcss:
-        specifier: ^0.6.11
-        version: 0.6.11(prettier-plugin-svelte@3.3.3(prettier@3.8.1)(svelte@5.25.8))(prettier@3.8.1)
+        specifier: ^0.8.0
+        version: 0.8.0(prettier-plugin-svelte@4.1.1(prettier@3.8.1)(svelte@5.25.8))(prettier@3.8.1)
       svelte:
         specifier: ^5.0.0
         version: 5.25.8
@@ -1447,6 +1450,9 @@ packages:
     resolution: {integrity: sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ==}
     engines: {node: '>= 0.4'}
 
+  html-to-image@1.11.13:
+    resolution: {integrity: sha512-cuOPoI7WApyhBElTTb9oqsawRvZ0rHhaHwghRLlTuffoD1B2aDemlCruLeZrUIIdvG7gs9xeELEPm6PhuASqrg==}
+
   ignore@5.3.2:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
@@ -1881,17 +1887,20 @@ packages:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
     engines: {node: '>= 0.8.0'}
 
-  prettier-plugin-svelte@3.3.3:
-    resolution: {integrity: sha512-yViK9zqQ+H2qZD1w/bH7W8i+bVfKrD8GIFjkFe4Thl6kCT9SlAsXVNmt3jCvQOCsnOhcvYgsoVlRV/Eu6x5nNw==}
+  prettier-plugin-svelte@4.1.1:
+    resolution: {integrity: sha512-wXvbXMjSvb4C9ENWTHXyd+ihakKCsJ6rJhLP6/8HFNj4GkZr48jqL9PoKsl2sk7SyCZRTnJ7O2TTowUpOxP/KA==}
+    engines: {node: '>=20'}
     peerDependencies:
       prettier: ^3.0.0
-      svelte: ^3.2.0 || ^4.0.0-next.0 || ^5.0.0-next.0
+      svelte: ^5.0.0
 
-  prettier-plugin-tailwindcss@0.6.11:
-    resolution: {integrity: sha512-YxaYSIvZPAqhrrEpRtonnrXdghZg1irNg4qrjboCXrpybLWVs55cW2N3juhspVJiO0JBvYJT8SYsJpc8OQSnsA==}
-    engines: {node: '>=14.21.3'}
+  prettier-plugin-tailwindcss@0.8.0:
+    resolution: {integrity: sha512-V8ITGH87yuBDF6JpEZTOVlUz/saAwqb8f3HRgUj8Lh+tGCcrmorhsLpYqzygwFwK0PE2Ib6Mv3M7T/uE2tZV1g==}
+    engines: {node: '>=20.19'}
     peerDependencies:
       '@ianvs/prettier-plugin-sort-imports': '*'
+      '@prettier/plugin-hermes': '*'
+      '@prettier/plugin-oxc': '*'
       '@prettier/plugin-pug': '*'
       '@shopify/prettier-plugin-liquid': '*'
       '@trivago/prettier-plugin-sort-imports': '*'
@@ -1899,17 +1908,19 @@ packages:
       prettier: ^3.0
       prettier-plugin-astro: '*'
       prettier-plugin-css-order: '*'
-      prettier-plugin-import-sort: '*'
       prettier-plugin-jsdoc: '*'
       prettier-plugin-marko: '*'
       prettier-plugin-multiline-arrays: '*'
       prettier-plugin-organize-attributes: '*'
       prettier-plugin-organize-imports: '*'
       prettier-plugin-sort-imports: '*'
-      prettier-plugin-style-order: '*'
       prettier-plugin-svelte: '*'
     peerDependenciesMeta:
       '@ianvs/prettier-plugin-sort-imports':
+        optional: true
+      '@prettier/plugin-hermes':
+        optional: true
+      '@prettier/plugin-oxc':
         optional: true
       '@prettier/plugin-pug':
         optional: true
@@ -1923,8 +1934,6 @@ packages:
         optional: true
       prettier-plugin-css-order:
         optional: true
-      prettier-plugin-import-sort:
-        optional: true
       prettier-plugin-jsdoc:
         optional: true
       prettier-plugin-marko:
@@ -1936,8 +1945,6 @@ packages:
       prettier-plugin-organize-imports:
         optional: true
       prettier-plugin-sort-imports:
-        optional: true
-      prettier-plugin-style-order:
         optional: true
       prettier-plugin-svelte:
         optional: true
@@ -3631,6 +3638,8 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
+  html-to-image@1.11.13: {}
+
   ignore@5.3.2: {}
 
   import-fresh@3.3.1:
@@ -4022,16 +4031,16 @@ snapshots:
 
   prelude-ls@1.2.1: {}
 
-  prettier-plugin-svelte@3.3.3(prettier@3.8.1)(svelte@5.25.8):
+  prettier-plugin-svelte@4.1.1(prettier@3.8.1)(svelte@5.25.8):
     dependencies:
       prettier: 3.8.1
       svelte: 5.25.8
 
-  prettier-plugin-tailwindcss@0.6.11(prettier-plugin-svelte@3.3.3(prettier@3.8.1)(svelte@5.25.8))(prettier@3.8.1):
+  prettier-plugin-tailwindcss@0.8.0(prettier-plugin-svelte@4.1.1(prettier@3.8.1)(svelte@5.25.8))(prettier@3.8.1):
     dependencies:
       prettier: 3.8.1
     optionalDependencies:
-      prettier-plugin-svelte: 3.3.3(prettier@3.8.1)(svelte@5.25.8)
+      prettier-plugin-svelte: 4.1.1(prettier@3.8.1)(svelte@5.25.8)
 
   prettier@3.8.1: {}
 

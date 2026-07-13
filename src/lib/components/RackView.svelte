@@ -65,11 +65,33 @@
 				</div>
 			{/each}
 		</div>
-		{#if layout.unrackedCount > 0}
-			<p class="rack-footnote">
-				{layout.unrackedCount}
-				{layout.unrackedCount === 1 ? 'entity is' : 'entities are'} not rack-mounted.
-			</p>
+		{#if layout.unracked.length > 0}
+			<details class="unracked">
+				<summary>
+					{layout.unracked.length}
+					{layout.unracked.length === 1 ? 'entity is' : 'entities are'} not rack-mounted
+				</summary>
+				<div class="unracked-list">
+					{#each layout.unracked as entity (`${entity.kind}:${entity.name}`)}
+						<button
+							type="button"
+							class="unracked-item"
+							title="Open the editor to place this in a rack"
+							on:click={() => dispatch('select', { kind: entity.kind, name: entity.name })}
+						>
+							{#if resolveIconPath(entity.iconKey)}
+								<img src={resolveIconPath(entity.iconKey)} alt="" loading="lazy" />
+							{:else}
+								<span class="unracked-glyph" aria-hidden="true">
+									{entity.kind === 'machine' ? '🖥' : '○'}
+								</span>
+							{/if}
+							<span class="unracked-name">{entity.name}</span>
+							<span class="unracked-kind">{entity.subtitle || entity.kind}</span>
+						</button>
+					{/each}
+				</div>
+			</details>
 		{/if}
 	{/if}
 </div>
@@ -79,8 +101,8 @@
 		position: absolute;
 		inset: 0;
 		overflow: auto;
-		padding: 10rem 1rem 1rem;
-		background: var(--app-bg, transparent);
+		padding: 1.25rem 1rem 1rem;
+		background: var(--bg-canvas, transparent);
 	}
 
 	.rack-empty {
@@ -160,17 +182,17 @@
 	}
 
 	.rack-slot.machine {
-		background: color-mix(in oklab, var(--panel-bg) 55%, #3b82f6 45%);
-		border-color: #3b82f6;
+		background: var(--surface);
+		border-color: var(--border);
 	}
 
 	.rack-slot.device {
-		background: color-mix(in oklab, var(--panel-bg) 55%, #d97706 45%);
-		border-color: #d97706;
+		background: var(--surface-2);
+		border-color: var(--border);
 	}
 
 	.rack-slot:hover {
-		filter: brightness(1.08);
+		border-color: var(--accent);
 	}
 
 	.rack-slot img {
@@ -212,11 +234,71 @@
 		flex-shrink: 0;
 	}
 
-	.rack-footnote {
-		text-align: center;
-		font-size: 0.76rem;
+	.unracked {
+		max-width: 560px;
+		margin: 1.25rem auto 0;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-panel);
+		padding: 0.5rem 0.8rem;
+	}
+
+	.unracked summary {
+		font-size: 0.8rem;
 		font-weight: 600;
-		color: var(--muted-text);
-		margin-top: 1rem;
+		color: var(--text-2);
+		cursor: pointer;
+	}
+
+	.unracked-list {
+		display: flex;
+		flex-direction: column;
+		margin-top: 0.4rem;
+	}
+
+	.unracked-item {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		border: none;
+		background: transparent;
+		padding: 0.35rem 0.4rem;
+		border-radius: var(--radius-control);
+		cursor: pointer;
+		text-align: left;
+		font-family: inherit;
+	}
+
+	.unracked-item:hover {
+		background: var(--surface-2);
+	}
+
+	.unracked-item img {
+		width: 1.1rem;
+		height: 1.1rem;
+		object-fit: contain;
+	}
+
+	.unracked-glyph {
+		width: 1.1rem;
+		text-align: center;
+		font-size: 0.8rem;
+		color: var(--text-2);
+	}
+
+	.unracked-name {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: var(--text);
+		flex: 1;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.unracked-kind {
+		font-size: 0.7rem;
+		color: var(--text-2);
+		white-space: nowrap;
 	}
 </style>

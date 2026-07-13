@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { get } from 'svelte/store';
 	import cytoscape from 'cytoscape';
 	import dagre from 'cytoscape-dagre';
 
-	import { listIconDefinitions, resolveIconPath } from '$lib/config/iconRegistry';
+	import { resolveIconPath } from '$lib/config/iconRegistry';
+	import IconPickerPopover from './IconPickerPopover.svelte';
 	import {
 		cloneNetworkData,
 		createEmptyDevice,
@@ -23,16 +23,21 @@
 	} from '$lib/data/networkEditor';
 	import loadNetworkData from '$lib/data/loadNetworkData';
 	import { buildIpamReport, suggestNextFreeIp, type IpamReport } from '$lib/data/ipam';
-	import { vlanColor } from '$lib/graph/vlanPalette';
+	import { buildVlanIndexMap, vlanPaletteColor } from '$lib/graph/vlanPalette';
+	import { readCanvasTokens, type CanvasTokens } from '$lib/graph/canvasTokens';
 	import { buildRackLayout, knownRackNames } from '$lib/data/rackLayout';
 	import RackView from './RackView.svelte';
+	import NodeCardLayer from './NodeCardLayer.svelte';
 	import { validateNetworkData, type ValidationIssue } from '$lib/data/networkSchema';
 	import transformNetworkDataToGraph from '$lib/graph/transformNetworkData';
-	import { computeSearchMatches } from '$lib/graph/searchHighlight';
+	import { computeSearchMatches, computeSearchMatchList } from '$lib/graph/searchHighlight';
 	import type { GraphEdgeData, GraphNodeData, GraphTransformResult } from '$lib/graph/types';
 	import { themeMode, type ThemeMode } from '$lib/stores/theme';
 	import type { NetworkData, Port } from '$lib/types';
 	import Modal from './Modal.svelte';
+	import AppBar from './AppBar.svelte';
+	import FirstRunCard from './FirstRunCard.svelte';
+	import { toPng } from 'html-to-image';
 
 	export let jsonPath = '/data/network.json';
 
@@ -72,8 +77,10 @@
 
 	let newMachineDraft = createEmptyMachine();
 	let newDeviceDraft = createEmptyDevice();
-	let iconSearch = '';
-	let iconPickerExpanded = false;
+	let iconPopoverOpen = false;
+	let vmIconPopoverIndex: number | null = null;
+	let expandedVmIndex: number | null = null;
+	let expandedPortIndex: number | null = null;
 	let lastIconPickerContext = '';
 
 	let isLoadingData = false;
@@ -86,10 +93,17 @@
 	let readOnlyNotice = defaultReadOnlyNotice;
 
 	let showEthernetLabels = false;
+	let showCableSpeeds = true;
 	let diagramViewMode: DiagramViewMode = 'network';
 	let searchQuery = '';
 	let searchMatchCount = 0;
 	let lastTransformResult: GraphTransformResult | null = null;
+	let visibleGraphNodes: GraphTransformResult['nodes'] = [];
+	let dimmedNodeIds: ReadonlySet<string> = new Set();
+	let matchedNodeIds: ReadonlySet<string> = new Set();
+	let activeSearchNodeId: string | null = null;
+	let searchMatchIds: string[] = [];
+	let searchActiveIndex = -1;
 	let showIpamPanel = false;
 	let activeVlanFilter: number | null = null;
 	let machineVmIndex: GraphTransformResult['machineVmIndex'] = {};
@@ -107,10 +121,10 @@
 	let lastSavedSnapshot = '';
 	let hasLoadedInitialData = false;
 	let connectionDraftByKey: Record<string, { device: string; port: string }> = {};
-	let mapControlsCollapsed = false;
+	let appBar: AppBar | null = null;
+	let graphViewport: HTMLDivElement;
+	let isExportingPng = false;
 
-	const iconDefinitions = listIconDefinitions();
-	const iconResultLimit = 100;
 	let tooltip = {
 		visible: false,
 		text: '',
@@ -128,26 +142,16 @@
 	};
 	const tooltipViewportPadding = 8;
 
-	function normalizeIconSearchValue(value: string): string {
-		return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-	}
-
-	$: normalizedIconSearch = normalizeIconSearchValue(iconSearch);
-	$: iconSearchTokens = normalizedIconSearch.split(' ').filter(Boolean);
-	$: filteredIconDefinitions = iconDefinitions.filter((icon) => {
-		if (iconSearchTokens.length === 0) {
-			return true;
-		}
-		const searchable = normalizeIconSearchValue(`${icon.label} ${icon.key}`);
-		return (
-			iconSearchTokens.every((token) => searchable.includes(token))
-		);
-	});
-	$: visibleIconDefinitions = filteredIconDefinitions.slice(0, iconResultLimit);
-
 	$: vlanLegend = (() => {
+		const indexByVlanId = buildVlanIndexMap(networkData.subnets);
 		const seen = new Set<number>();
-		const entries: Array<{ vlanId: number; label: string; color: string }> = [];
+		const entries: Array<{
+			vlanId: number;
+			name: string;
+			cidr: string;
+			color: string;
+			count: number;
+		}> = [];
 		for (const subnet of networkData.subnets ?? []) {
 			if (typeof subnet.vlanId !== 'number' || seen.has(subnet.vlanId)) {
 				continue;
@@ -155,13 +159,24 @@
 			seen.add(subnet.vlanId);
 			entries.push({
 				vlanId: subnet.vlanId,
-				label: subnet.name ? `${subnet.name} (${subnet.cidr})` : subnet.cidr,
-				color: vlanColor(subnet.vlanId)
+				name: subnet.name ?? `VLAN ${subnet.vlanId}`,
+				cidr: subnet.cidr,
+				color: vlanPaletteColor(indexByVlanId.get(subnet.vlanId) ?? 0),
+				count: 0
 			});
 		}
-		return entries.sort((a, b) => a.vlanId - b.vlanId);
+		for (const node of lastTransformResult?.nodes ?? []) {
+			const entry = entries.find((candidate) => candidate.vlanId === node.data.vlanId);
+			if (entry) {
+				entry.count += 1;
+			}
+		}
+		return entries;
 	})();
-	$: if (activeVlanFilter !== null && !vlanLegend.some((entry) => entry.vlanId === activeVlanFilter)) {
+	$: if (
+		activeVlanFilter !== null &&
+		!vlanLegend.some((entry) => entry.vlanId === activeVlanFilter)
+	) {
 		activeVlanFilter = null;
 		applyEmphasis();
 	}
@@ -275,6 +290,88 @@
 	$: ipamWarnings = ipamReport.duplicates.map(
 		(duplicate) => `Duplicate IP ${duplicate.ip}: assigned to ${duplicate.owners.join(' and ')}.`
 	);
+	$: ipamView = ipamReport.subnets.map((subnet) => ({
+		...subnet,
+		utilisation: Math.min(100, Math.round((subnet.used / Math.max(subnet.capacity, 1)) * 100)),
+		nextFree: suggestNextFreeIp(networkData, subnet.cidr)
+	}));
+
+	let subnetEditorOpen = false;
+	let showRackManager = false;
+
+	// First-run card: shown for an empty dataset or the untouched example
+	// file, until dismissed (persisted) or the user makes their first edit.
+	const firstRunDismissKey = 'ond-firstrun-dismissed';
+	let firstRunDismissed =
+		typeof localStorage !== 'undefined' && localStorage.getItem(firstRunDismissKey) === '1';
+
+	function dismissFirstRun() {
+		firstRunDismissed = true;
+		try {
+			localStorage.setItem(firstRunDismissKey, '1');
+		} catch {
+			// localStorage unavailable; the card just returns next session.
+		}
+	}
+
+	function openFirstMachineEditor() {
+		if (networkData.machines.length > 0) {
+			selectedTarget = { type: 'machine', index: 0 };
+		}
+	}
+
+	$: totalEntities = networkData.machines.length + networkData.devices.length;
+	$: allExampleNames =
+		totalEntities > 0 &&
+		[
+			...networkData.machines.map((machine) => machine.machineName),
+			...networkData.devices.map((device) => device.name)
+		].every((name) => name.trim().toLowerCase().startsWith('example'));
+	$: showFirstRun =
+		hasLoadedInitialData &&
+		!firstRunDismissed &&
+		!isLoadingData &&
+		(totalEntities === 0 || (totalEntities <= 4 && allExampleNames));
+	let copiedIp: string | null = null;
+	let copiedIpTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingSubnetRemoval: number | null = null;
+
+	async function copyNextFreeIp(ip: string) {
+		try {
+			if (navigator.clipboard?.writeText) {
+				await navigator.clipboard.writeText(ip);
+			} else {
+				const scratch = document.createElement('textarea');
+				scratch.value = ip;
+				scratch.style.position = 'fixed';
+				scratch.style.opacity = '0';
+				document.body.appendChild(scratch);
+				scratch.select();
+				document.execCommand('copy');
+				scratch.remove();
+			}
+			copiedIp = ip;
+			if (copiedIpTimer !== null) {
+				clearTimeout(copiedIpTimer);
+			}
+			copiedIpTimer = setTimeout(() => {
+				copiedIp = null;
+			}, 1500);
+		} catch {
+			// Clipboard unavailable (e.g. plain-http self-hosted deployments).
+		}
+	}
+
+	// Removing a declared subnet is destructive-ish, so the quiet Remove
+	// button asks for a second click instead of opening a modal.
+	function requestSubnetRemoval(index: number) {
+		if (pendingSubnetRemoval === index) {
+			pendingSubnetRemoval = null;
+			removeDeclaredSubnet(index);
+		} else {
+			pendingSubnetRemoval = index;
+		}
+	}
 
 	function duplicateOwnersForIp(report: IpamReport, ip: string, selfLabel: string): string[] {
 		const entry = report.duplicates.find((duplicate) => duplicate.ip === ip.trim());
@@ -325,26 +422,36 @@
 			.every((hostId) => isHostCollapsed(hostId));
 	$: selectedTargetIconKey =
 		selectedTarget?.type === 'machine'
-			? selectedMachine?.iconKey ?? ''
+			? (selectedMachine?.iconKey ?? '')
 			: selectedTarget?.type === 'device'
-				? selectedDevice?.iconKey ?? ''
+				? (selectedDevice?.iconKey ?? '')
 				: selectedTarget?.type === 'vm'
-					? selectedVm?.iconKey ?? ''
+					? (selectedVm?.iconKey ?? '')
 					: '';
 	$: selectedTargetIconPath = resolveIconPath(selectedTargetIconKey || undefined);
-	// collapse the icon picker whenever the modal target changes
+	// close popovers and collapse expanded rows whenever the modal target changes
 	$: {
 		const context = addModalKind ?? (selectedTarget ? JSON.stringify(selectedTarget) : '');
 		if (context !== lastIconPickerContext) {
 			lastIconPickerContext = context;
-			iconPickerExpanded = false;
+			iconPopoverOpen = false;
+			vmIconPopoverIndex = null;
+			expandedVmIndex = null;
+			expandedPortIndex = null;
 		}
 	}
+	// Narrowed copies of the selected-target indices: TypeScript can't narrow
+	// the SelectedTarget union across the big template, so the markup uses
+	// these instead of selectedTarget.index directly.
+	$: selectedMachineIndex = selectedTarget?.type === 'machine' ? selectedTarget.index : -1;
+	$: selectedDeviceIndex = selectedTarget?.type === 'device' ? selectedTarget.index : -1;
+	$: selectedVmMachineIndex = selectedTarget?.type === 'vm' ? selectedTarget.machineIndex : -1;
+	$: selectedVmIndex = selectedTarget?.type === 'vm' ? selectedTarget.vmIndex : -1;
 	$: addModalIconKey =
 		addModalKind === 'machine'
-			? newMachineDraft.iconKey ?? ''
+			? (newMachineDraft.iconKey ?? '')
 			: addModalKind === 'device'
-				? newDeviceDraft.iconKey ?? ''
+				? (newDeviceDraft.iconKey ?? '')
 				: '';
 	$: addModalIconPath = resolveIconPath(addModalIconKey || undefined);
 
@@ -361,7 +468,11 @@
 	}
 
 	function findVmIndexByName(machineIndex: number, vmName: string): number {
-		return networkData.machines[machineIndex]?.software.vms.findIndex((vm) => equalsIgnoreCase(vm.name, vmName)) ?? -1;
+		return (
+			networkData.machines[machineIndex]?.software.vms.findIndex((vm) =>
+				equalsIgnoreCase(vm.name, vmName)
+			) ?? -1
+		);
 	}
 
 	function listConnectableOwnerNames(kind: OwnerKind, ownerName: string): string[] {
@@ -584,67 +695,26 @@
 		return `Read-only: ${reason}`;
 	}
 
-	function createGraphStyles(theme: ThemeMode): cytoscape.Stylesheet[] {
-		const nodeText = theme === 'dark' ? '#e2e8f0' : '#1e293b';
-		const textOutline = theme === 'dark' ? '#0f172a' : '#f8fafc';
-		const edgeColor = theme === 'dark' ? '#94a3b8' : '#475569';
+	// Nodes are invisible hit targets (interaction, layout, edge anchoring);
+	// the visible cards live in NodeCardLayer. Only edges are canvas-drawn,
+	// styled from the same CSS tokens as the chrome.
+	function createGraphStyles(tokens: CanvasTokens): cytoscape.StylesheetStyle[] {
+		const monoStack = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+		const portLabelStyle = {
+			'source-label': 'data(sourcePort)',
+			'target-label': 'data(targetPort)'
+		} as const;
 
 		return [
 			{
 				selector: 'node',
 				style: {
-					label: 'data(label)',
-					'font-size': 12,
-					'font-weight': 600,
-					'text-wrap': 'wrap',
-					'text-max-width': '140px',
-					'text-valign': 'center',
-					'text-halign': 'center',
-					color: nodeText,
-					'text-outline-color': textOutline,
-					'text-outline-width': 2,
+					shape: 'round-rectangle',
 					width: 'data(nodeWidth)',
 					height: 'data(nodeHeight)',
-					'border-width': 2,
-					'border-color': '#64748b',
-					'background-color': theme === 'dark' ? '#1e293b' : '#f1f5f9'
-				}
-			},
-			{
-				selector: 'node[kind = "machine"]',
-				style: {
-					shape: 'round-rectangle',
-					'background-color': theme === 'dark' ? '#1d4ed8' : '#bfdbfe',
-					'border-color': '#3b82f6'
-				}
-			},
-			{
-				selector: 'node[kind = "vm"]',
-				style: {
-					shape: 'ellipse',
-					'background-color': theme === 'dark' ? '#14532d' : '#bbf7d0',
-					'border-color': '#16a34a',
-					'font-size': 10,
-					'text-max-width': '120px'
-				}
-			},
-			{
-				selector: 'node[kind = "device"]',
-				style: {
-					shape: 'hexagon',
-					'background-color': theme === 'dark' ? '#78350f' : '#fde68a',
-					'border-color': '#d97706'
-				}
-			},
-			{
-				selector: 'node[iconUrl]',
-				style: {
-					'background-image': 'data(iconUrl)',
-					'background-fit': 'contain',
-					'background-clip': 'none',
-					'background-width': 'auto',
-					'background-height': 'auto',
-					'background-position-y': '30%'
+					'background-opacity': 0,
+					'border-width': 0,
+					label: ''
 				}
 			},
 			{
@@ -652,21 +722,13 @@
 				style: {
 					width: 2,
 					'curve-style': 'bezier',
-					'line-color': edgeColor,
-					'target-arrow-color': edgeColor,
-					'target-arrow-shape': 'triangle',
-					label: 'data(label)',
-					'font-size': 9,
-					'text-rotation': 'autorotate',
-					color: nodeText,
-					'text-outline-color': textOutline,
-					'text-outline-width': 3
+					'line-color': tokens.edge,
+					'target-arrow-shape': 'none'
 				}
 			},
 			{
 				selector: 'edge[kind = "physical"]',
 				style: {
-					'target-arrow-shape': 'none',
 					label: '',
 					'source-label': '',
 					'target-label': '',
@@ -674,9 +736,17 @@
 					'target-text-offset': 28,
 					'source-text-margin-y': -9,
 					'target-text-margin-y': 9,
-					'text-background-color': theme === 'dark' ? '#0f172a' : '#f8fafc',
+					'font-family': monoStack,
+					'font-size': 9,
+					'text-rotation': 'autorotate',
+					color: tokens.chipText,
+					'text-background-color': tokens.chipBg,
 					'text-background-opacity': 1,
-					'text-background-padding': '4px'
+					'text-background-shape': 'roundrectangle',
+					'text-background-padding': '3px',
+					'text-border-width': 1,
+					'text-border-color': tokens.border,
+					'text-border-opacity': 1
 				}
 			},
 			{
@@ -684,10 +754,8 @@
 				style: {
 					'line-style': 'dashed',
 					'line-dash-pattern': [7, 5],
-					'line-color': theme === 'dark' ? '#64748b' : '#94a3b8',
-					'target-arrow-color': theme === 'dark' ? '#64748b' : '#94a3b8',
-					'font-size': 8,
-					color: theme === 'dark' ? '#94a3b8' : '#64748b'
+					'line-color': tokens.edge,
+					opacity: 0.7
 				}
 			},
 			{
@@ -697,23 +765,16 @@
 				}
 			},
 			{
-				selector: 'node[vlanColor]',
-				style: {
-					'border-width': 4,
-					'border-color': 'data(vlanColor)'
-				}
+				// Port numbers fade in on hover/selection only.
+				selector: 'edge.show-ports',
+				style: { ...portLabelStyle }
 			},
 			{
-				selector: 'node.search-match',
+				selector: 'edge:selected',
 				style: {
-					'border-width': 4,
-					'border-color': '#f59e0b'
-				}
-			},
-			{
-				selector: 'node.dimmed',
-				style: {
-					opacity: 0.15
+					...portLabelStyle,
+					width: 3,
+					'line-color': tokens.accent
 				}
 			},
 			{
@@ -760,7 +821,9 @@
 		const bucketKeys = Object.keys(buckets).sort((a, b) => Number(a) - Number(b));
 		core.batch(() => {
 			for (const bucketKey of bucketKeys) {
-				const rankNodes = (buckets[bucketKey] ?? []).sort((a, b) => a.position().x - b.position().x);
+				const rankNodes = (buckets[bucketKey] ?? []).sort(
+					(a, b) => a.position().x - b.position().x
+				);
 				let prevRight: number | null = null;
 				for (const node of rankNodes) {
 					const pos = node.position();
@@ -994,18 +1057,16 @@
 		if (!cy) {
 			return;
 		}
+		const chipField = showCableSpeeds ? 'chipLabel' : 'chipLabelNoSpeed';
 		const physicalEdges = cy.edges('[kind = "physical"]').toArray();
 		cy.batch(() => {
 			for (const edge of physicalEdges) {
-				edge.style('label', visible ? String(edge.data('label') ?? '') : '');
-				edge.style('source-label', visible ? String(edge.data('sourcePort') ?? '') : '');
-				edge.style('target-label', visible ? String(edge.data('targetPort') ?? '') : '');
+				edge.style('label', visible ? String(edge.data(chipField) ?? '') : '');
 			}
 		});
 	}
 
-	function onDiagramViewSelectChange(event: Event) {
-		const nextValue = (event.currentTarget as HTMLSelectElement).value;
+	function handleViewChange(nextValue: string) {
 		diagramViewMode = nextValue === 'device' || nextValue === 'rack' ? nextValue : 'network';
 		if (diagramViewMode !== 'rack') {
 			refreshGraph();
@@ -1028,44 +1089,18 @@
 	}
 
 	function buildVisibleElements(transformed: GraphTransformResult) {
-		const nodes = transformed.nodes
-			.filter((node) => {
-				if (node.data.kind !== 'vm') {
-					return true;
-				}
-				const hostId = node.data.hostMachineId;
-				if (!hostId) {
-					return true;
-				}
-				return !isHostCollapsed(hostId);
-			})
-			.map((node) => {
-				if (node.data.kind !== 'machine') {
-					return node;
-				}
-
-				const hostId = node.data.id;
-				const vmCount = machineVmIndex[hostId]?.vmCount ?? 0;
-				const rawName = node.data.rawName ?? node.data.label;
-				if (vmCount <= 0 || !isHostCollapsed(hostId)) {
-					return {
-						...node,
-						data: {
-							...node.data,
-							label: rawName
-						}
-					};
-				}
-
-				const suffix = vmCount === 1 ? 'VM' : 'VMs';
-				return {
-					...node,
-					data: {
-						...node.data,
-						label: `${rawName} (+ ${vmCount} ${suffix})`
-					}
-				};
-			});
+		// The card layer shows the VM count in the meta line, so collapsed
+		// hosts no longer need a label suffix — collapse only filters nodes.
+		const nodes = transformed.nodes.filter((node) => {
+			if (node.data.kind !== 'vm') {
+				return true;
+			}
+			const hostId = node.data.hostMachineId;
+			if (!hostId) {
+				return true;
+			}
+			return !isHostCollapsed(hostId);
+		});
 
 		const edges = transformed.edges.filter((edge) => {
 			if (diagramViewMode === 'device' && edge.data.kind === 'physical') {
@@ -1090,11 +1125,6 @@
 		}
 		collapsedHosts = next;
 		refreshGraph();
-	}
-
-	function onAllVmsToggleChange(event: Event) {
-		const hideAll = (event.currentTarget as HTMLInputElement).checked;
-		setCollapsedStateForAll(hideAll);
 	}
 
 	function toggleHostVmVisibility(hostId: string) {
@@ -1123,19 +1153,20 @@
 		machineVmIndex = transformed.machineVmIndex;
 		syncCollapsedHosts(machineVmIndex);
 		const visible = buildVisibleElements(transformed);
+		visibleGraphNodes = visible.nodes;
 		warnings = transformed.warnings;
-			cy.batch(() => {
-				cy?.elements().remove();
-				cy?.add([...visible.nodes, ...visible.edges]);
-			});
-			runAdaptiveLayout(cy);
-			if (diagramViewMode === 'network') {
-				applyPhysicalEdgeDeconfliction(cy);
-				applyEthernetLabelVisibility(showEthernetLabels);
-			}
-			applyEmphasis();
-			tooltip.visible = false;
+		cy.batch(() => {
+			cy?.elements().remove();
+			cy?.add([...visible.nodes, ...visible.edges]);
+		});
+		runAdaptiveLayout(cy);
+		if (diagramViewMode === 'network') {
+			applyPhysicalEdgeDeconfliction(cy);
+			applyEthernetLabelVisibility(showEthernetLabels);
 		}
+		applyEmphasis();
+		tooltip.visible = false;
+	}
 
 	function applyEmphasis() {
 		if (!cy) {
@@ -1144,10 +1175,15 @@
 
 		const hasQuery = Boolean(searchQuery.trim());
 		const hasVlanFilter = activeVlanFilter !== null;
+		activeSearchNodeId = null;
+		searchActiveIndex = -1;
 		if (!hasQuery && !hasVlanFilter) {
 			cy.batch(() => {
-				cy?.elements().removeClass('dimmed search-match');
+				cy?.edges().removeClass('dimmed');
 			});
+			dimmedNodeIds = new Set();
+			matchedNodeIds = new Set();
+			searchMatchIds = [];
 			searchMatchCount = 0;
 			return;
 		}
@@ -1157,17 +1193,22 @@
 				? computeSearchMatches(lastTransformResult, searchQuery)
 				: null;
 		const passing = new Set<string>();
+		const dimmed = new Set<string>();
+		const matched = new Set<string>();
 		let matchCount = 0;
 		cy.batch(() => {
 			for (const node of cy?.nodes().toArray() ?? []) {
 				const matchesSearch = !searchMatches || searchMatches.has(node.id());
 				const matchesVlan = !hasVlanFilter || node.data('vlanId') === activeVlanFilter;
 				const passes = matchesSearch && matchesVlan;
-				node.toggleClass('search-match', Boolean(searchMatches) && passes);
-				node.toggleClass('dimmed', !passes);
 				if (passes) {
 					passing.add(node.id());
 					matchCount += 1;
+					if (searchMatches) {
+						matched.add(node.id());
+					}
+				} else {
+					dimmed.add(node.id());
 				}
 			}
 			for (const edge of cy?.edges().toArray() ?? []) {
@@ -1176,7 +1217,17 @@
 				edge.toggleClass('dimmed', !touchesPassing);
 			}
 		});
+		dimmedNodeIds = dimmed;
+		matchedNodeIds = matched;
 		searchMatchCount = matchCount;
+		// Ordered list for Enter-cycling, restricted to nodes actually present
+		// (VMs of collapsed hosts are represented by their host).
+		searchMatchIds =
+			hasQuery && lastTransformResult
+				? computeSearchMatchList(lastTransformResult, searchQuery).filter(
+						(id) => cy?.getElementById(id).nonempty() && !dimmed.has(id)
+					)
+				: [];
 	}
 
 	function clearSearch() {
@@ -1205,6 +1256,7 @@
 		if (!hasLoadedInitialData) {
 			return;
 		}
+		firstRunDismissed = true;
 		saveError = null;
 		saveState = 'unsaved';
 		if (!writable) {
@@ -1325,9 +1377,7 @@
 		if (!target) {
 			return;
 		}
-		if (normalized) {
-			iconPickerExpanded = false;
-		}
+		iconPopoverOpen = false;
 
 		if (target.type === 'machine') {
 			const index = target.index;
@@ -1363,9 +1413,7 @@
 
 	function setAddModalIconKey(nextKey: string) {
 		const normalized = nextKey.trim();
-		if (normalized) {
-			iconPickerExpanded = false;
-		}
+		iconPopoverOpen = false;
 		if (addModalKind === 'machine') {
 			newMachineDraft.iconKey = normalized || undefined;
 			return;
@@ -1373,6 +1421,17 @@
 		if (addModalKind === 'device') {
 			newDeviceDraft.iconKey = normalized || undefined;
 		}
+	}
+
+	function setVmIconKey(machineIndex: number, vmIndex: number, nextKey: string) {
+		const normalized = nextKey.trim();
+		vmIconPopoverIndex = null;
+		mutateDraft(
+			(draft) => {
+				draft.machines[machineIndex].software.vms[vmIndex].iconKey = normalized || undefined;
+			},
+			{ autosave: true }
+		);
 	}
 
 	function nextUniqueName(base: string, existing: string[]): string {
@@ -1389,7 +1448,10 @@
 		return `${base} ${Date.now()}`;
 	}
 
-	function hasOwnerNameCollision(nextName: string, ignore?: { type: 'machine' | 'device'; index: number }) {
+	function hasOwnerNameCollision(
+		nextName: string,
+		ignore?: { type: 'machine' | 'device'; index: number }
+	) {
 		const normalized = nextName.trim().toLowerCase();
 		if (!normalized) {
 			return false;
@@ -1426,7 +1488,9 @@
 			return;
 		}
 		const renamed = renameOwner(networkData, 'machine', previous, nextName.trim());
-		const nextIndex = renamed.machines.findIndex((machine) => equalsIgnoreCase(machine.machineName, nextName));
+		const nextIndex = renamed.machines.findIndex((machine) =>
+			equalsIgnoreCase(machine.machineName, nextName)
+		);
 		applyDraft(renamed);
 		if (nextIndex >= 0) {
 			selectedTarget = { type: 'machine', index: nextIndex };
@@ -1443,7 +1507,9 @@
 			return;
 		}
 		const renamed = renameOwner(networkData, 'device', previous, nextName.trim());
-		const nextIndex = renamed.devices.findIndex((device) => equalsIgnoreCase(device.name, nextName));
+		const nextIndex = renamed.devices.findIndex((device) =>
+			equalsIgnoreCase(device.name, nextName)
+		);
 		applyDraft(renamed);
 		if (nextIndex >= 0) {
 			selectedTarget = { type: 'device', index: nextIndex };
@@ -1463,7 +1529,9 @@
 			saveError = `Port name "${nextPortName.trim()}" already exists on ${machine.machineName}.`;
 			return;
 		}
-		applyDraft(renamePort(networkData, 'machine', machine.machineName, previous, nextPortName.trim()));
+		applyDraft(
+			renamePort(networkData, 'machine', machine.machineName, previous, nextPortName.trim())
+		);
 	}
 
 	function updateDevicePortName(deviceIndex: number, portIndex: number, nextPortName: string) {
@@ -1482,7 +1550,11 @@
 		applyDraft(renamePort(networkData, 'device', device.name, previous, nextPortName.trim()));
 	}
 
-	function updateMachinePortConnection(machineIndex: number, portIndex: number, target: Port['connectedTo']) {
+	function updateMachinePortConnection(
+		machineIndex: number,
+		portIndex: number,
+		target: Port['connectedTo']
+	) {
 		const machine = networkData.machines[machineIndex];
 		const port = machine?.ports?.[portIndex];
 		const portName = port?.portName;
@@ -1493,10 +1565,16 @@
 		if (sameConnection(port.connectedTo, normalizedTarget)) {
 			return;
 		}
-		applyDraft(setPortConnection(networkData, 'machine', machine.machineName, portName, normalizedTarget));
+		applyDraft(
+			setPortConnection(networkData, 'machine', machine.machineName, portName, normalizedTarget)
+		);
 	}
 
-	function updateDevicePortConnection(deviceIndex: number, portIndex: number, target: Port['connectedTo']) {
+	function updateDevicePortConnection(
+		deviceIndex: number,
+		portIndex: number,
+		target: Port['connectedTo']
+	) {
 		const device = networkData.devices[deviceIndex];
 		const port = device?.ports?.[portIndex];
 		const portName = port?.portName;
@@ -1645,7 +1723,10 @@
 	}
 
 	function addMachine() {
-		const existingNames = [...networkData.machines.map((item) => item.machineName), ...networkData.devices.map((item) => item.name)];
+		const existingNames = [
+			...networkData.machines.map((item) => item.machineName),
+			...networkData.devices.map((item) => item.name)
+		];
 		newMachineDraft = {
 			...createEmptyMachine(),
 			machineName: nextUniqueName('New Machine', existingNames)
@@ -1655,7 +1736,10 @@
 	}
 
 	function addDevice() {
-		const existingNames = [...networkData.machines.map((item) => item.machineName), ...networkData.devices.map((item) => item.name)];
+		const existingNames = [
+			...networkData.machines.map((item) => item.machineName),
+			...networkData.devices.map((item) => item.name)
+		];
 		newDeviceDraft = {
 			...createEmptyDevice(),
 			name: nextUniqueName('New Device', existingNames)
@@ -1704,63 +1788,110 @@
 	function submitAddEntity() {
 		if (addModalKind === 'machine') {
 			mutateDraft((draft) => {
-				draft.machines.push(cloneNetworkData({ machines: [newMachineDraft], devices: [] }).machines[0]);
+				draft.machines.push(
+					cloneNetworkData({ machines: [newMachineDraft], devices: [] }).machines[0]
+				);
 			});
 			selectedTarget = { type: 'machine', index: networkData.machines.length - 1 };
 		}
 		if (addModalKind === 'device') {
 			mutateDraft((draft) => {
-				draft.devices.push(cloneNetworkData({ machines: [], devices: [newDeviceDraft] }).devices[0]);
+				draft.devices.push(
+					cloneNetworkData({ machines: [], devices: [newDeviceDraft] }).devices[0]
+				);
 			});
 			selectedTarget = { type: 'device', index: networkData.devices.length - 1 };
 		}
 		closeAddEntityModal();
 	}
 
-	function onThemeToggleChange(event: Event) {
-		const isDark = (event.currentTarget as HTMLInputElement).checked;
-		themeMode.set(isDark ? 'dark' : 'light');
-	}
-
-	function onEthernetLabelsToggleChange(event: Event) {
-		showEthernetLabels = (event.currentTarget as HTMLInputElement).checked;
+	function handleEthernetLabelsChange(nextValue: boolean) {
+		showEthernetLabels = nextValue;
 		if (diagramViewMode === 'network') {
 			applyEthernetLabelVisibility(showEthernetLabels);
 		}
 	}
 
-	function toggleMapControls() {
-		mapControlsCollapsed = !mapControlsCollapsed;
+	function handleCableSpeedsChange(nextValue: boolean) {
+		showCableSpeeds = nextValue;
+		if (diagramViewMode === 'network') {
+			applyEthernetLabelVisibility(showEthernetLabels);
+		}
 	}
 
-	function clearIconSearch() {
-		iconSearch = '';
+	// Enter/Shift-Enter cycles through matches, panning the camera to each.
+	function cycleSearchMatch(direction: 1 | -1) {
+		if (!cy || searchMatchIds.length === 0) {
+			return;
+		}
+		searchActiveIndex =
+			(searchActiveIndex + direction + searchMatchIds.length) % searchMatchIds.length;
+		const nodeId = searchMatchIds[searchActiveIndex];
+		const node = cy.getElementById(nodeId);
+		if (node.empty()) {
+			return;
+		}
+		activeSearchNodeId = nodeId;
+		cy.stop();
+		cy.animate(
+			{ center: { eles: node }, zoom: Math.max(cy.zoom(), 0.8) },
+			{ duration: 250, easing: 'ease-in-out-quad' }
+		);
+	}
+
+	function onWindowKeydown(event: KeyboardEvent) {
+		if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) {
+			return;
+		}
+		const target = event.target as HTMLElement | null;
+		const tag = target?.tagName;
+		if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+			return;
+		}
+		if (
+			selectedTarget !== null ||
+			addModalKind !== null ||
+			showExportModal ||
+			deleteTarget !== null
+		) {
+			return;
+		}
+		event.preventDefault();
+		appBar?.focusSearch();
 	}
 
 	function closeSelectedTargetModal() {
 		selectedTarget = null;
 		rackNewNameTarget = null;
-		iconPickerExpanded = false;
-		clearIconSearch();
+		iconPopoverOpen = false;
+		vmIconPopoverIndex = null;
+		expandedVmIndex = null;
+		expandedPortIndex = null;
 	}
 
 	function closeAddEntityModal() {
 		addModalKind = null;
-		iconPickerExpanded = false;
-		clearIconSearch();
+		iconPopoverOpen = false;
 	}
 
-	function saveStateLabel(): string {
-		if (saveState === 'saved') {
-			return writable ? 'Saved' : 'Read-only';
+	function toggleExpandedVm(index: number) {
+		expandedVmIndex = expandedVmIndex === index ? null : index;
+		vmIconPopoverIndex = null;
+	}
+
+	function toggleExpandedPort(index: number) {
+		expandedPortIndex = expandedPortIndex === index ? null : index;
+	}
+
+	function rowKeydown(event: KeyboardEvent, toggle: () => void) {
+		if (event.key === 'Enter' || event.key === ' ') {
+			event.preventDefault();
+			toggle();
 		}
-		if (saveState === 'saving') {
-			return 'Saving...';
-		}
-		if (saveState === 'error') {
-			return 'Save failed';
-		}
-		return writable ? 'Unsaved changes' : 'Unsaved (read-only)';
+	}
+
+	function formatSpeed(speedGbps: number | undefined): string {
+		return typeof speedGbps === 'number' ? `${speedGbps} GbE` : '—';
 	}
 
 	async function loadData() {
@@ -1787,37 +1918,40 @@
 				throw new Error('API returned invalid network data');
 			}
 
-				networkData = cloneNetworkData(validation.data);
-				ensureSelectedTargetValid();
-				writable = body.writable;
-				readOnlyNotice = body.writable
-					? defaultReadOnlyNotice
-					: resolveReadOnlyNotice(body.writableReason);
-				dataSourceLabel = body.source;
-				lastSavedSnapshot = JSON.stringify(networkData);
-				saveState = 'saved';
-				connectionDraftByKey = {};
-				revalidateDraft();
-				refreshGraph();
+			networkData = cloneNetworkData(validation.data);
+			ensureSelectedTargetValid();
+			writable = body.writable;
+			readOnlyNotice = body.writable
+				? defaultReadOnlyNotice
+				: resolveReadOnlyNotice(body.writableReason);
+			dataSourceLabel = body.source;
+			lastSavedSnapshot = JSON.stringify(networkData);
+			saveState = 'saved';
+			connectionDraftByKey = {};
+			revalidateDraft();
+			refreshGraph();
 			hasLoadedInitialData = true;
 			isLoadingData = false;
 			return;
 		} catch (apiError) {
-			console.warn('[OpenNetworkDiagram] API load unavailable, falling back to static JSON', apiError);
+			console.warn(
+				'[OpenNetworkDiagram] API load unavailable, falling back to static JSON',
+				apiError
+			);
 		}
 
 		try {
 			const fallbackData = await loadNetworkData(jsonPath);
-				networkData = cloneNetworkData(fallbackData);
-				ensureSelectedTargetValid();
-				writable = false;
-				readOnlyNotice = 'Read-only: API unavailable; using bundled static data.';
-				dataSourceLabel = jsonPath;
-				lastSavedSnapshot = JSON.stringify(networkData);
-				saveState = 'saved';
-				connectionDraftByKey = {};
-				revalidateDraft();
-				refreshGraph();
+			networkData = cloneNetworkData(fallbackData);
+			ensureSelectedTargetValid();
+			writable = false;
+			readOnlyNotice = 'Read-only: API unavailable; using bundled static data.';
+			dataSourceLabel = jsonPath;
+			lastSavedSnapshot = JSON.stringify(networkData);
+			saveState = 'saved';
+			connectionDraftByKey = {};
+			revalidateDraft();
+			refreshGraph();
 			hasLoadedInitialData = true;
 		} catch (error) {
 			loadError = resolveErrorMessage(error);
@@ -1844,30 +1978,54 @@
 		deleteVm(deleteTarget.machineIndex, deleteTarget.vmIndex);
 	}
 
-	function exportPng() {
-		if (!cy) {
+	function nextFrame(): Promise<void> {
+		return new Promise((resolve) => {
+			requestAnimationFrame(() => resolve());
+		});
+	}
+
+	// cy.png() can't see the HTML card layer, so exports rasterise the graph
+	// viewport (canvas edges + cards) with html-to-image instead. The graph is
+	// fitted to the viewport for the shot and the camera restored afterwards.
+	async function exportPng() {
+		if (!cy || !graphViewport || isExportingPng) {
 			return;
 		}
+		isExportingPng = true;
 
-		const background =
-			exportBackground === 'transparent'
-				? 'transparent'
-				: currentTheme === 'dark'
-					? '#0b1220'
-					: '#e2e8f0';
+		const previousPan = { ...cy.pan() };
+		const previousZoom = cy.zoom();
+		try {
+			cy.fit(undefined, 32);
+			// Two frames: one for the card layer's rAF sync, one for Svelte to
+			// paint the updated card transforms.
+			await nextFrame();
+			await nextFrame();
+			await Promise.all(
+				Array.from(graphViewport.querySelectorAll('img'), (image) =>
+					image.decode().catch(() => undefined)
+				)
+			);
 
-		const dataUrl = cy.png({
-			full: true,
-			scale: exportScale,
-			bg: background
-		});
-		const anchor = document.createElement('a');
-		anchor.href = dataUrl;
-		anchor.download = `${exportFileName || 'network-diagram'}.png`;
-		document.body.appendChild(anchor);
-		anchor.click();
-		anchor.remove();
-		showExportModal = false;
+			const dataUrl = await toPng(graphViewport, {
+				pixelRatio: exportScale,
+				...(exportBackground === 'transparent'
+					? {}
+					: { backgroundColor: readCanvasTokens().bgCanvas })
+			});
+			const anchor = document.createElement('a');
+			anchor.href = dataUrl;
+			anchor.download = `${exportFileName || 'network-diagram'}.png`;
+			document.body.appendChild(anchor);
+			anchor.click();
+			anchor.remove();
+			showExportModal = false;
+		} catch (error) {
+			saveError = `PNG export failed: ${error instanceof Error ? error.message : String(error)}`;
+		} finally {
+			cy.viewport({ zoom: previousZoom, pan: previousPan });
+			isExportingPng = false;
+		}
 	}
 
 	onMount(() => {
@@ -1875,21 +2033,24 @@
 		let resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 		if (!cytoscape('layout', 'dagre')) {
-			cytoscape.use(dagre);
+			// cytoscape-dagre's types still reference @types/cytoscape, which
+			// clashes with cytoscape's own bundled types since 3.33.
+			cytoscape.use(dagre as unknown as cytoscape.Ext);
 		}
 
 		themeMode.initialize();
-			unsubscribeTheme = themeMode.subscribe((theme) => {
-				currentTheme = theme;
-				if (cy) {
-					cy.style(createGraphStyles(theme));
-					runAdaptiveLayout(cy);
-					if (diagramViewMode === 'network') {
-						applyPhysicalEdgeDeconfliction(cy);
-						applyEthernetLabelVisibility(showEthernetLabels);
-					}
+		unsubscribeTheme = themeMode.subscribe((theme) => {
+			currentTheme = theme;
+			if (cy) {
+				// data-theme is already applied to <html> by the store, so the
+				// tokens read here are the new theme's values — canvas and
+				// chrome can't drift. Cards restyle themselves via CSS.
+				cy.style(createGraphStyles(readCanvasTokens()));
+				if (diagramViewMode === 'network') {
+					applyEthernetLabelVisibility(showEthernetLabels);
 				}
-			});
+			}
+		});
 
 		cy = cytoscape({
 			container,
@@ -1898,7 +2059,7 @@
 			autoungrabify: true,
 			minZoom: 0.2,
 			maxZoom: 2.5,
-			style: createGraphStyles(get(themeMode))
+			style: createGraphStyles(readCanvasTokens())
 		});
 
 		void loadData().finally(() => {
@@ -1938,6 +2099,7 @@
 
 		cy.on('mouseover', 'edge[kind = "physical"]', (event) => {
 			const edge = event.target;
+			edge.addClass('show-ports');
 			const data = edge.data() as GraphEdgeData;
 			const parts = [
 				`${data.sourcePort ?? '?'} ↔ ${data.targetPort ?? '?'}`,
@@ -1959,7 +2121,8 @@
 			};
 		});
 
-		cy.on('mouseout', 'edge', () => {
+		cy.on('mouseout', 'edge', (event) => {
+			event.target.removeClass('show-ports');
 			tooltip.visible = false;
 		});
 
@@ -1973,17 +2136,17 @@
 			}
 
 			resizeTimeoutId = setTimeout(() => {
-					if (!cy) {
-						return;
-					}
-					runAdaptiveLayout(cy);
-					if (diagramViewMode === 'network') {
-						applyPhysicalEdgeDeconfliction(cy);
-						applyEthernetLabelVisibility(showEthernetLabels);
-					}
-					resizeTimeoutId = null;
-				}, 100);
-			};
+				if (!cy) {
+					return;
+				}
+				runAdaptiveLayout(cy);
+				if (diagramViewMode === 'network') {
+					applyPhysicalEdgeDeconfliction(cy);
+					applyEthernetLabelVisibility(showEthernetLabels);
+				}
+				resizeTimeoutId = null;
+			}, 100);
+		};
 		window.addEventListener('resize', resizeHandler);
 
 		return () => {
@@ -2007,196 +2170,158 @@
 	});
 </script>
 
-	<div class="diagram-shell">
-		<div class="diagram-stage" bind:this={diagramStage}>
+<svelte:window on:keydown={onWindowKeydown} />
+
+<div class="diagram-shell">
+	<AppBar
+		bind:this={appBar}
+		bind:searchQuery
+		{dataSourceLabel}
+		{saveState}
+		{writable}
+		{hasLoadedInitialData}
+		{readOnlyNotice}
+		{saveError}
+		{isLoadingData}
+		viewMode={diagramViewMode}
+		searchCountLabel={searchActiveIndex >= 0
+			? `${searchActiveIndex + 1} of ${searchMatchIds.length}`
+			: String(searchMatchCount)}
+		{showEthernetLabels}
+		{showCableSpeeds}
+		showVms={!areAllVmHostsCollapsed}
+		{hasAnyVmHosts}
+		ipamOpen={showIpamPanel}
+		theme={currentTheme}
+		on:viewchange={(event) => handleViewChange(event.detail)}
+		on:search={applyEmphasis}
+		on:searchcycle={(event) => cycleSearchMatch(event.detail.direction)}
+		on:clearsearch={clearSearch}
+		on:addmachine={addMachine}
+		on:adddevice={addDevice}
+		on:toggleipam={() => (showIpamPanel = !showIpamPanel)}
+		on:ethernetlabels={(event) => handleEthernetLabelsChange(event.detail)}
+		on:cablespeeds={(event) => handleCableSpeedsChange(event.detail)}
+		on:showvms={(event) => setCollapsedStateForAll(!event.detail)}
+		on:exportpng={() => (showExportModal = true)}
+		on:reload={loadData}
+		on:toggletheme={() => themeMode.toggle()}
+	/>
+	<div class="diagram-stage" bind:this={diagramStage}>
+		<div class="graph-viewport" bind:this={graphViewport}>
 			<div class="diagram-canvas" bind:this={container}></div>
+			<NodeCardLayer
+				{cy}
+				nodes={diagramViewMode === 'rack' ? [] : visibleGraphNodes}
+				dimmedIds={dimmedNodeIds}
+				matchedIds={matchedNodeIds}
+				activeId={activeSearchNodeId}
+			/>
+		</div>
 
-			{#if diagramViewMode === 'rack'}
-				<RackView
-					layout={rackLayout}
-					on:select={(event) => {
-						const { kind, name } = event.detail;
-						const index =
-							kind === 'machine' ? findMachineIndexByName(name) : findDeviceIndexByName(name);
-						if (index >= 0) {
-							selectedTarget = { type: kind, index };
-						}
-					}}
-				/>
-			{/if}
+		{#if diagramViewMode === 'rack'}
+			<RackView
+				layout={rackLayout}
+				on:select={(event) => {
+					const { kind, name } = event.detail;
+					const index =
+						kind === 'machine' ? findMachineIndexByName(name) : findDeviceIndexByName(name);
+					if (index >= 0) {
+						selectedTarget = { type: kind, index };
+					}
+				}}
+			/>
+		{/if}
 
-			<div class="map-controls-shell">
-				{#if mapControlsCollapsed}
-					<button type="button" class="controls-toggle" on:click={toggleMapControls}>Show Controls</button>
-				{:else}
-					<div class="map-controls">
-						<div class="search-control">
-							<input
-								type="text"
-								placeholder="Find name, IP, role…"
-								aria-label="Search diagram nodes"
-								bind:value={searchQuery}
-								on:input={applyEmphasis}
-							/>
-							{#if searchQuery.trim()}
-								<span class="search-count">{searchMatchCount}</span>
+		{#if diagramViewMode === 'rack' && writable}
+			<div class="racks-manager">
+				<button
+					type="button"
+					class="ipam-disclosure racks-manager-toggle"
+					aria-expanded={showRackManager}
+					on:click={() => (showRackManager = !showRackManager)}
+				>
+					<span class="disclosure-chevron" class:open={showRackManager} aria-hidden="true">›</span>
+					Manage racks
+				</button>
+				{#if showRackManager}
+					{#each rackLayout.racks as rack (rack.name)}
+						<div class="racks-manager-row">
+							<label>
+								Name
+								<input
+									type="text"
+									value={rack.name}
+									on:change={(event) =>
+										renameRackDefinition(
+											rack.name,
+											(event.currentTarget as HTMLInputElement).value
+										)}
+								/>
+							</label>
+							<label>
+								Units
+								<input
+									type="number"
+									min="1"
+									placeholder={String(rack.heightU)}
+									value={rack.declaredHeightU ?? ''}
+									on:change={(event) =>
+										setRackHeightU(rack.name, (event.currentTarget as HTMLInputElement).value)}
+								/>
+							</label>
+							{#if rack.declared && rack.slots.length === 0}
 								<button
 									type="button"
-									class="search-clear"
-									aria-label="Clear search"
-									title="Clear search"
-									on:click={clearSearch}
+									class="btn-danger-quiet subnet-remove"
+									title="Remove this empty rack"
+									on:click={() => removeRackDefinition(rack.name)}
 								>
-									×
+									Remove
 								</button>
 							{/if}
 						</div>
-						<button type="button" on:click={loadData} disabled={isLoadingData}>Reload JSON</button>
-						<button type="button" on:click={addMachine}>Add Machine</button>
-						<button type="button" on:click={addDevice}>Add Device</button>
-						<label class="select-control">
-							<span>Diagram View</span>
-							<select
-								value={diagramViewMode}
-								aria-label="Select diagram view"
-								on:change={onDiagramViewSelectChange}
-							>
-								<option value="network">Network view (with ethernet)</option>
-								<option value="device">Device view (without ethernet)</option>
-								<option value="rack">Rack view (physical layout)</option>
-							</select>
-						</label>
-						<label
-							class="toggle-control"
-							class:disabled={diagramViewMode !== 'network'}
-							title={diagramViewMode !== 'network' ? 'Ethernet labels are available in Network view.' : undefined}
-						>
-							<span>Ethernet Labels</span>
-							<input
-								class="toggle-input"
-								type="checkbox"
-								checked={showEthernetLabels}
-								aria-label="Toggle ethernet labels"
-								disabled={diagramViewMode !== 'network'}
-								on:change={onEthernetLabelsToggleChange}
-							/>
-							<span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-						</label>
-						<button
-							type="button"
-							class:active-toggle={showIpamPanel}
-							on:click={() => (showIpamPanel = !showIpamPanel)}
-						>
-							IPAM
-						</button>
-						<button
-							type="button"
-							disabled={diagramViewMode === 'rack'}
-							title={diagramViewMode === 'rack' ? 'PNG export is available in the graph views.' : undefined}
-							on:click={() => (showExportModal = true)}
-						>
-							Export PNG
-						</button>
-						<label class="toggle-control">
-							<span>Dark Mode</span>
-							<input
-								class="toggle-input"
-								type="checkbox"
-								checked={currentTheme === 'dark'}
-								aria-label="Toggle dark mode"
-								on:change={onThemeToggleChange}
-							/>
-							<span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-						</label>
-						<label class="toggle-control" class:disabled={!hasAnyVmHosts}>
-							<span>Hide All VMs</span>
-							<input
-								class="toggle-input"
-								type="checkbox"
-								checked={areAllVmHostsCollapsed}
-								aria-label="Toggle all virtual machine visibility"
-								disabled={!hasAnyVmHosts}
-								on:change={onAllVmsToggleChange}
-							/>
-							<span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-						</label>
-						<button
-							type="button"
-							class="controls-collapse-tab"
-							aria-label="Hide controls"
-							title="Hide controls"
-							on:click={toggleMapControls}
-						>
-							›
-						</button>
+					{/each}
+					<div class="inline-actions">
+						<button type="button" class="btn-small" on:click={addRackDefinition}>Add rack</button>
 					</div>
 				{/if}
 			</div>
-
-		{#if diagramViewMode === 'rack'}
-			<div class="racks-manager">
-				<h3>Racks</h3>
-				{#each rackLayout.racks as rack (rack.name)}
-					<div class="racks-manager-row">
-						<label>
-							Name
-							<input
-								type="text"
-								value={rack.name}
-								on:change={(event) =>
-									renameRackDefinition(rack.name, (event.currentTarget as HTMLInputElement).value)}
-							/>
-						</label>
-						<label>
-							Units
-							<input
-								type="number"
-								min="1"
-								placeholder={String(rack.heightU)}
-								value={rack.declaredHeightU ?? ''}
-								on:change={(event) =>
-									setRackHeightU(rack.name, (event.currentTarget as HTMLInputElement).value)}
-							/>
-						</label>
-						{#if rack.declared && rack.slots.length === 0}
-							<button
-								type="button"
-								class="danger"
-								title="Remove this empty rack"
-								on:click={() => removeRackDefinition(rack.name)}
-							>
-								Remove
-							</button>
-						{/if}
-					</div>
-				{/each}
-				<div class="inline-actions">
-					<button type="button" on:click={addRackDefinition}>Add Rack</button>
-				</div>
-			</div>
 		{/if}
 
-		{#if vlanLegend.length > 0 && diagramViewMode !== 'rack'}
-			<div class="vlan-legend" role="group" aria-label="VLAN legend">
-				{#each vlanLegend as entry (entry.vlanId)}
-					<button
-						type="button"
-						class="vlan-legend-item"
-						class:active={activeVlanFilter === entry.vlanId}
-						title={`Show only VLAN ${entry.vlanId}`}
-						on:click={() => toggleVlanFilter(entry.vlanId)}
-					>
-						<span class="vlan-swatch" style={`background: ${entry.color};`}></span>
-						VLAN {entry.vlanId} — {entry.label}
-					</button>
-				{/each}
+		{#if diagramViewMode !== 'rack' && (vlanLegend.length > 0 || visibleGraphNodes.length > 0)}
+			<div class="map-legend" role="group" aria-label="Map legend">
+				{#if vlanLegend.length > 0}
+					<div class="legend-title">VLANs · click to filter</div>
+					{#each vlanLegend as entry (entry.vlanId)}
+						<button
+							type="button"
+							class="legend-row"
+							class:selected={activeVlanFilter === entry.vlanId}
+							class:filtered-out={activeVlanFilter !== null && activeVlanFilter !== entry.vlanId}
+							title={`Show only VLAN ${entry.vlanId}`}
+							on:click={() => toggleVlanFilter(entry.vlanId)}
+						>
+							<span class="vlan-swatch" style={`background: ${entry.color};`}></span>
+							<span class="legend-name">{entry.name}</span>
+							<span class="legend-cidr">{entry.cidr}</span>
+							<span class="legend-count">{entry.count}</span>
+						</button>
+					{/each}
+					<div class="legend-rule"></div>
+				{/if}
+				<div class="shape-key">
+					<span class="shape-item"><span class="shape-swatch host"></span>Host</span>
+					<span class="shape-item"><span class="shape-swatch infra"></span>Infra</span>
+					<span class="shape-item"><span class="shape-swatch device"></span>Device</span>
+				</div>
 			</div>
 		{/if}
 
 		{#if showIpamPanel}
 			<div class="ipam-panel">
 				<div class="ipam-panel-head">
-					<h3>IP Address Management</h3>
+					<h3>IPAM</h3>
 					<button
 						type="button"
 						class="ipam-close"
@@ -2208,25 +2333,32 @@
 				</div>
 
 				<section class="ipam-section">
-					<h4>Subnets</h4>
-					{#each ipamReport.subnets as subnet (subnet.cidr)}
+					{#each ipamView as subnet (subnet.cidr)}
 						<div class="ipam-subnet">
 							<div class="ipam-subnet-head">
-								<strong>{subnet.cidr}</strong>
 								{#if subnet.name}<span class="ipam-subnet-name">{subnet.name}</span>{/if}
+								<code class="ipam-cidr">{subnet.cidr}</code>
 								{#if subnet.vlanId}<span class="ipam-badge">VLAN {subnet.vlanId}</span>{/if}
 								{#if !subnet.declared}<span class="ipam-badge inferred">inferred</span>{/if}
 							</div>
 							<div class="ipam-bar" role="presentation">
 								<div
 									class="ipam-bar-fill"
-									style={`width: ${Math.min(100, Math.round((subnet.used / Math.max(subnet.capacity, 1)) * 100))}%;`}
+									class:hot={subnet.utilisation > 90}
+									style={`width: ${subnet.utilisation}%;`}
 								></div>
 							</div>
 							<div class="ipam-subnet-meta">
-								{subnet.used} of {subnet.capacity} in use
-								{#if suggestNextFreeIp(networkData, subnet.cidr)}
-									· next free: <code>{suggestNextFreeIp(networkData, subnet.cidr)}</code>
+								<span>{subnet.used} of {subnet.capacity} in use</span>
+								{#if subnet.nextFree}
+									<button
+										type="button"
+										class="ipam-copy-ip"
+										title="Copy next free IP"
+										on:click={() => copyNextFreeIp(subnet.nextFree ?? '')}
+									>
+										{copiedIp === subnet.nextFree ? 'Copied ✓' : `next free ${subnet.nextFree}`}
+									</button>
 								{/if}
 							</div>
 						</div>
@@ -2257,115 +2389,142 @@
 					</section>
 				{/if}
 
-				<section class="ipam-section">
-					<h4>Declared subnets</h4>
-					{#each networkData.subnets ?? [] as subnet, subnetIndex (`${subnet.cidr}:${subnetIndex}`)}
-						<div class="ipam-subnet-editor">
-							<label>
-								CIDR
-								<input
-									type="text"
-									value={subnet.cidr}
-									on:change={(event) =>
-										mutateDraft(
-											(draft) => {
-												if (draft.subnets?.[subnetIndex]) {
-													draft.subnets[subnetIndex].cidr = (
-														event.currentTarget as HTMLInputElement
-													).value;
-												}
-											},
-											{ autosave: true }
-										)}
-								/>
-							</label>
-							<label>
-								Name
-								<input
-									type="text"
-									value={subnet.name ?? ''}
-									on:change={(event) =>
-										mutateDraft(
-											(draft) => {
-												const nextName = (event.currentTarget as HTMLInputElement).value.trim();
-												if (draft.subnets?.[subnetIndex]) {
-													if (nextName) {
-														draft.subnets[subnetIndex].name = nextName;
-													} else {
-														delete draft.subnets[subnetIndex].name;
-													}
-												}
-											},
-											{ autosave: true }
-										)}
-								/>
-							</label>
-							<label>
-								VLAN
-								<input
-									type="number"
-									min="1"
-									max="4094"
-									value={subnet.vlanId ?? ''}
-									on:change={(event) =>
-										mutateDraft(
-											(draft) => {
-												const parsed = Number((event.currentTarget as HTMLInputElement).value);
-												if (draft.subnets?.[subnetIndex]) {
-													if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 4094) {
-														draft.subnets[subnetIndex].vlanId = parsed;
-													} else {
-														delete draft.subnets[subnetIndex].vlanId;
-													}
-												}
-											},
-											{ autosave: true }
-										)}
-								/>
-							</label>
-							<button
-								type="button"
-								class="danger"
-								aria-label={`Remove subnet ${subnet.cidr}`}
-								on:click={() => removeDeclaredSubnet(subnetIndex)}
+				{#if writable}
+					<section class="ipam-section ipam-manage">
+						<button
+							type="button"
+							class="ipam-disclosure"
+							aria-expanded={subnetEditorOpen}
+							on:click={() => {
+								subnetEditorOpen = !subnetEditorOpen;
+								pendingSubnetRemoval = null;
+							}}
+						>
+							<span class="disclosure-chevron" class:open={subnetEditorOpen} aria-hidden="true"
+								>›</span
 							>
-								Remove
-							</button>
-						</div>
-					{:else}
-						<p class="ipam-empty">
-							None declared; subnets above are inferred as /24 from the IPs in use.
-						</p>
-					{/each}
-					<div class="inline-actions">
-						<button type="button" on:click={addDeclaredSubnet}>Declare Subnet</button>
-					</div>
-				</section>
+							Edit subnets
+						</button>
+						{#if subnetEditorOpen}
+							{#each networkData.subnets ?? [] as subnet, subnetIndex (`${subnet.cidr}:${subnetIndex}`)}
+								<div class="ipam-subnet-editor">
+									<label>
+										CIDR
+										<input
+											type="text"
+											value={subnet.cidr}
+											on:change={(event) =>
+												mutateDraft(
+													(draft) => {
+														if (draft.subnets?.[subnetIndex]) {
+															draft.subnets[subnetIndex].cidr = (
+																event.currentTarget as HTMLInputElement
+															).value;
+														}
+													},
+													{ autosave: true }
+												)}
+										/>
+									</label>
+									<label>
+										Name
+										<input
+											type="text"
+											value={subnet.name ?? ''}
+											on:change={(event) =>
+												mutateDraft(
+													(draft) => {
+														const nextName = (event.currentTarget as HTMLInputElement).value.trim();
+														if (draft.subnets?.[subnetIndex]) {
+															if (nextName) {
+																draft.subnets[subnetIndex].name = nextName;
+															} else {
+																delete draft.subnets[subnetIndex].name;
+															}
+														}
+													},
+													{ autosave: true }
+												)}
+										/>
+									</label>
+									<label>
+										VLAN
+										<input
+											type="number"
+											min="1"
+											max="4094"
+											value={subnet.vlanId ?? ''}
+											on:change={(event) =>
+												mutateDraft(
+													(draft) => {
+														const parsed = Number((event.currentTarget as HTMLInputElement).value);
+														if (draft.subnets?.[subnetIndex]) {
+															if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 4094) {
+																draft.subnets[subnetIndex].vlanId = parsed;
+															} else {
+																delete draft.subnets[subnetIndex].vlanId;
+															}
+														}
+													},
+													{ autosave: true }
+												)}
+										/>
+									</label>
+									<button
+										type="button"
+										class="btn-danger-quiet subnet-remove"
+										class:confirming={pendingSubnetRemoval === subnetIndex}
+										aria-label={`Remove subnet ${subnet.cidr}`}
+										on:click={() => requestSubnetRemoval(subnetIndex)}
+									>
+										{pendingSubnetRemoval === subnetIndex ? 'Confirm?' : 'Remove'}
+									</button>
+								</div>
+							{:else}
+								<p class="ipam-empty">
+									None declared; subnets above are inferred as /24 from the IPs in use.
+								</p>
+							{/each}
+							<div class="inline-actions">
+								<button type="button" class="btn-small" on:click={addDeclaredSubnet}>
+									Declare subnet
+								</button>
+							</div>
+						{/if}
+					</section>
+				{/if}
 			</div>
 		{/if}
 
-		<div class="data-source">Source: {dataSourceLabel}</div>
-		<div class="status-chip" class:error={saveState === 'error'}>
-			{saveStateLabel()}
-		</div>
-
-		{#if hasLoadedInitialData && !writable}
-			<div class="readonly-banner">{readOnlyNotice}</div>
+		{#if showFirstRun && diagramViewMode !== 'rack'}
+			<FirstRunCard
+				isSampleData={allExampleNames}
+				{writable}
+				hasMachines={networkData.machines.length > 0}
+				on:addmachine={addMachine}
+				on:connectport={openFirstMachineEditor}
+				on:openipam={() => (showIpamPanel = true)}
+				on:dismiss={dismissFirstRun}
+			/>
 		{/if}
 
-		{#if isLoadingData}
-			<div class="status-chip loading">Loading JSON...</div>
-		{/if}
-
-		{#if loadError}
-			<div class="status-chip error secondary">{loadError}</div>
-		{/if}
-		{#if saveError}
-			<div class="status-chip error tertiary">{saveError}</div>
+		{#if loadError || saveError}
+			<div class="stage-toasts">
+				{#if loadError}
+					<div class="stage-toast">{loadError}</div>
+				{/if}
+				{#if saveError}
+					<div class="stage-toast">{saveError}</div>
+				{/if}
+			</div>
 		{/if}
 
 		{#if tooltip.visible}
-			<div class="tooltip" bind:this={tooltipElement} style={`left: ${tooltip.x}px; top: ${tooltip.y}px;`}>
+			<div
+				class="tooltip"
+				bind:this={tooltipElement}
+				style={`left: ${tooltip.x}px; top: ${tooltip.y}px;`}
+			>
 				{tooltip.text}
 			</div>
 		{/if}
@@ -2373,7 +2532,11 @@
 
 	{#if warnings.length + ipamWarnings.length + rackLayout.warnings.length > 0}
 		<details class="warnings-panel">
-			<summary>Data warnings ({warnings.length + ipamWarnings.length + rackLayout.warnings.length})</summary>
+			<summary
+				>Data warnings ({warnings.length +
+					ipamWarnings.length +
+					rackLayout.warnings.length})</summary
+			>
 			<ul>
 				{#each [...warnings, ...ipamWarnings, ...rackLayout.warnings] as warning (warning)}
 					<li>{warning}</li>
@@ -2394,1101 +2557,1344 @@
 	{/if}
 </div>
 
-<Modal
-	isOpen={selectedTarget !== null}
-	title={
-		selectedTarget?.type === 'machine'
-			? selectedMachine?.machineName ?? 'Machine'
-			: selectedTarget?.type === 'device'
-				? selectedDevice?.name ?? 'Device'
-				: selectedVm?.name ?? 'Virtual Machine'
-	}
-	maxWidth="880px"
-	on:close={closeSelectedTargetModal}
->
-	{#if selectedTargetIconKey && !iconPickerExpanded}
-		<div class="icon-search-collapsed">
-			<div class="icon-preview-card">
-				{#if selectedTargetIconPath}
-					<img src={selectedTargetIconPath} alt="Selected icon preview" loading="lazy" />
-				{/if}
-				<code>{selectedTargetIconKey}</code>
-			</div>
-			<button type="button" on:click={() => (iconPickerExpanded = true)}>Change Icon</button>
-		</div>
-	{:else}
-		<div class="icon-search">
-			<label>
-				Icon Search
-				<input
-					type="text"
-					bind:value={iconSearch}
-					placeholder="Search icons..."
-					autocomplete="off"
-				/>
-			</label>
-			{#if selectedTargetIconPath}
-				<div class="icon-preview-card">
-					<img src={selectedTargetIconPath} alt="Selected icon preview" loading="lazy" />
-					<code>{selectedTargetIconKey}</code>
-					<button type="button" class="icon-collapse" on:click={() => (iconPickerExpanded = false)}>
-						Done
-					</button>
-				</div>
-			{/if}
-			<p class="icon-results-meta">
-				Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
-				matching icons
-			</p>
-			<div class="icon-results-grid">
-				{#each visibleIconDefinitions as icon (icon.key)}
-					<button
-						type="button"
-						class="icon-result-option"
-						on:click={() => setSelectedTargetIconKey(icon.key)}
-						title={icon.key}
-					>
-						<img src={icon.path} alt={icon.label} loading="lazy" />
-						<span>{icon.label}</span>
-						<code>{icon.key}</code>
-					</button>
-				{/each}
-			</div>
-			{#if filteredIconDefinitions.length === 0}
-				<p class="icon-results-empty">No icons match your search.</p>
-			{/if}
-		</div>
-	{/if}
-	<datalist id="cable-type-options">
-		<option value="Cat5e"></option>
-		<option value="Cat6"></option>
-		<option value="Cat6a"></option>
-		<option value="Cat7"></option>
-		<option value="Cat8"></option>
-		<option value="DAC"></option>
-		<option value="Fibre"></option>
-	</datalist>
-	<datalist id="cable-color-options">
-		<option value="blue"></option>
-		<option value="red"></option>
-		<option value="green"></option>
-		<option value="yellow"></option>
-		<option value="orange"></option>
-		<option value="purple"></option>
-		<option value="pink"></option>
-		<option value="white"></option>
-		<option value="grey"></option>
-		<option value="black"></option>
-	</datalist>
-	{#if selectedTarget?.type === 'machine' && selectedMachine}
-		<div class="inline-actions">
-			{#if selectedMachineHostId && selectedMachineVmCount > 0}
-				<button type="button" on:click={toggleSelectedMachineVmVisibility}>
-					{isHostCollapsed(selectedMachineHostId) ? 'Show VMs on Diagram' : 'Hide VMs on Diagram'}
-				</button>
-			{/if}
-		</div>
-		<section class="edit-section">
-			<label>
-				Machine Name
-				<input
-					type="text"
-					value={selectedMachine.machineName}
-					on:change={(event) =>
-						updateMachineName(selectedTarget.index, (event.currentTarget as HTMLInputElement).value)}
-				/>
-			</label>
-			<label>
-				IP Address
-				<input
-					type="text"
-					value={selectedMachine.ipAddress}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.index].ipAddress = (
-									event.currentTarget as HTMLInputElement
-								).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-				{#if selectedMachineIpConflicts.length > 0}
-					<span class="ip-conflict-hint">Also used by {selectedMachineIpConflicts.join(', ')}</span>
-				{/if}
-			</label>
-			<label>
-				Role
-				<input
-					type="text"
-					value={selectedMachine.role}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.index].role = (
-									event.currentTarget as HTMLInputElement
-								).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
-			<label>
-				Operating System
-				<input
-					type="text"
-					value={selectedMachine.operatingSystem}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.index].operatingSystem = (
-									event.currentTarget as HTMLInputElement
-								).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
-			<label>
-				Notes
-				<textarea
-					value={selectedMachine.notes ?? ''}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.index].notes = (
-									event.currentTarget as HTMLTextAreaElement
-								).value;
-							},
-							{ autosave: true }
-						)}
-				></textarea>
-			</label>
-		</section>
+<datalist id="cable-type-options">
+	<option value="Cat5e"></option>
+	<option value="Cat6"></option>
+	<option value="Cat6a"></option>
+	<option value="Cat7"></option>
+	<option value="Cat8"></option>
+	<option value="DAC"></option>
+	<option value="Fibre"></option>
+</datalist>
+<datalist id="cable-color-options">
+	<option value="blue"></option>
+	<option value="red"></option>
+	<option value="green"></option>
+	<option value="yellow"></option>
+	<option value="orange"></option>
+	<option value="purple"></option>
+	<option value="pink"></option>
+	<option value="white"></option>
+	<option value="grey"></option>
+	<option value="black"></option>
+</datalist>
+<datalist id="machine-connectable-owner-options">
+	{#each machineConnectableOwnerNames as ownerName (ownerName)}
+		<option value={ownerName}></option>
+	{/each}
+</datalist>
+<datalist id="device-connectable-owner-options">
+	{#each deviceConnectableOwnerNames as ownerName (ownerName)}
+		<option value={ownerName}></option>
+	{/each}
+</datalist>
 
-		<section class="edit-section">
-			<h4>Hardware</h4>
-			<div class="field-row">
-				<label>
-					CPU
-					<input
-						type="text"
-						value={selectedMachine.hardware.cpu}
-						on:input={(event) =>
-							mutateDraft(
-								(draft) => {
-									draft.machines[selectedTarget.index].hardware.cpu = (
-										event.currentTarget as HTMLInputElement
-									).value;
-								},
-								{ autosave: true }
-							)}
-					/>
-				</label>
-				<label>
-					RAM
-					<input
-						type="text"
-						value={selectedMachine.hardware.ram}
-						on:input={(event) =>
-							mutateDraft(
-								(draft) => {
-									draft.machines[selectedTarget.index].hardware.ram = (
-										event.currentTarget as HTMLInputElement
-									).value;
-								},
-								{ autosave: true }
-							)}
-					/>
-				</label>
-				<label>
-					Ports
-					<input
-						type="number"
-						min="0"
-						value={selectedMachine.hardware.networkPorts}
-						on:input={(event) =>
-							mutateDraft(
-								(draft) => {
-									const rawValue = (event.currentTarget as HTMLInputElement).value;
-									const parsed = Number(rawValue);
-									draft.machines[selectedTarget.index].hardware.networkPorts = Number.isFinite(
-										parsed
-									)
-										? parsed
-										: 0;
-								},
-								{ autosave: true }
-							)}
-					/>
-				</label>
-			</div>
-		</section>
-
-		<section class="edit-section">
-			<h4>Rack</h4>
-			<div class="field-row">
-				<label>
-					Rack
-					<select
-						value={rackNewNameTarget?.kind === 'machine' &&
-						rackNewNameTarget?.index === selectedTarget.index
-							? '__new__'
-							: (selectedMachine.rack?.name ?? '')}
-						on:change={(event) =>
-							onRackSelectChange(
-								'machine',
-								selectedTarget.index,
-								(event.currentTarget as HTMLSelectElement).value
-							)}
-					>
-						<option value="">Not racked</option>
-						{#each rackNames as rackName (rackName)}
-							<option value={rackName}>{rackName}</option>
-						{/each}
-						<option value="__new__">New rack…</option>
-					</select>
-				</label>
-				{#if rackNewNameTarget?.kind === 'machine' && rackNewNameTarget?.index === selectedTarget.index}
-					<label>
-						New Rack Name
-						<input
-							type="text"
-							placeholder="e.g. Lab Rack"
-							on:change={(event) =>
-								submitNewRackName((event.currentTarget as HTMLInputElement).value)}
-						/>
-					</label>
-				{/if}
-				<label>
-					Bottom U
-					<input
-						type="number"
-						min="1"
-						disabled={!selectedMachine.rack}
-						value={selectedMachine.rack?.unit ?? ''}
-						on:change={(event) =>
-							updateRackField(
-								'machine',
-								selectedTarget.index,
-								'unit',
-								(event.currentTarget as HTMLInputElement).value
-							)}
-					/>
-				</label>
-				<label>
-					Height (U)
-					<input
-						type="number"
-						min="1"
-						placeholder="1"
-						disabled={!selectedMachine.rack}
-						value={selectedMachine.rack?.heightU ?? ''}
-						on:change={(event) =>
-							updateRackField(
-								'machine',
-								selectedTarget.index,
-								'heightU',
-								(event.currentTarget as HTMLInputElement).value
-							)}
-					/>
-				</label>
-			</div>
-		</section>
-
-		<section class="edit-section">
-			<h4>Virtual Machines</h4>
-			<div class="inline-actions">
+<Modal isOpen={selectedTarget !== null} maxWidth="680px" on:close={closeSelectedTargetModal}>
+	<svelte:fragment slot="header">
+		<div class="entity-header">
+			<div class="icon-anchor">
 				<button
 					type="button"
-					on:click={() =>
-						mutateDraft((draft) => {
-							draft.machines[selectedTarget.index].software.vms.push({
-								...createEmptyVm(),
-								name: nextUniqueName(
-									'New VM',
-									draft.machines[selectedTarget.index].software.vms.map((vm) => vm.name)
-								),
-								ipAddress: suggestNextFreeIp(draft) ?? createEmptyVm().ipAddress
-							});
-						})}
+					class="icon-btn"
+					title="Change icon"
+					aria-label="Change icon"
+					on:click={() => (iconPopoverOpen = !iconPopoverOpen)}
 				>
-					Add VM
+					{#if selectedTargetIconPath}
+						<img src={selectedTargetIconPath} alt="" loading="lazy" />
+					{:else}
+						<span aria-hidden="true">⬢</span>
+					{/if}
 				</button>
+				{#if iconPopoverOpen}
+					<IconPickerPopover
+						currentIconKey={selectedTargetIconKey || undefined}
+						on:select={(event) => setSelectedTargetIconKey(event.detail)}
+						on:close={() => (iconPopoverOpen = false)}
+					/>
+				{/if}
 			</div>
-			{#each selectedMachine.software.vms as vm, vmIndex (`${vm.name}:${vm.ipAddress}:${vmIndex}`)}
-				<div class="item-card">
+			<div class="entity-id">
+				{#if selectedMachine}
+					<div class="entity-name-row">
+						<span class="entity-name">{selectedMachine.machineName}</span>
+						{#if selectedMachine.role}<span class="chip-role">{selectedMachine.role}</span>{/if}
+					</div>
+					<span class="entity-meta">
+						{selectedMachine.ipAddress}{selectedMachine.operatingSystem
+							? ` · ${selectedMachine.operatingSystem}`
+							: ''}{selectedMachine.rack
+							? ` · ${selectedMachine.rack.name} U${selectedMachine.rack.unit}`
+							: ''}
+					</span>
+				{:else if selectedDevice}
+					<div class="entity-name-row">
+						<span class="entity-name">{selectedDevice.name}</span>
+						{#if selectedDevice.type}<span class="chip-role">{selectedDevice.type}</span>{/if}
+					</div>
+					<span class="entity-meta">
+						{selectedDevice.ipAddress}{selectedDevice.rack
+							? ` · ${selectedDevice.rack.name} U${selectedDevice.rack.unit}`
+							: ''}
+					</span>
+				{:else if selectedVm}
+					<div class="entity-name-row">
+						<span class="entity-name">{selectedVm.name}</span>
+						{#if selectedVm.role}<span class="chip-role">{selectedVm.role}</span>{/if}
+					</div>
+					<span class="entity-meta">
+						{selectedVm.ipAddress} · VM on {networkData.machines[selectedVmMachineIndex]
+							?.machineName ?? '?'}
+					</span>
+				{/if}
+			</div>
+		</div>
+	</svelte:fragment>
+
+	{#if selectedTarget?.type === 'machine' && selectedMachine}
+		<div class="modal-sections">
+			<div class="field-grid cols-3">
+				<label>
+					Name
+					<input
+						type="text"
+						value={selectedMachine.machineName}
+						on:change={(event) =>
+							updateMachineName(
+								selectedMachineIndex,
+								(event.currentTarget as HTMLInputElement).value
+							)}
+					/>
+				</label>
+				<label>
+					IP address
+					<input
+						type="text"
+						class="mono"
+						value={selectedMachine.ipAddress}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedMachineIndex].ipAddress = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+					{#if selectedMachineIpConflicts.length > 0}
+						<span class="ip-conflict-hint"
+							>Also used by {selectedMachineIpConflicts.join(', ')}</span
+						>
+					{/if}
+				</label>
+				<label>
+					Role
+					<input
+						type="text"
+						value={selectedMachine.role}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedMachineIndex].role = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+				</label>
+			</div>
+			<div class="field-grid cols-1-2">
+				<label>
+					Operating system
+					<input
+						type="text"
+						value={selectedMachine.operatingSystem}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedMachineIndex].operatingSystem = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+				</label>
+				<label>
+					Notes
+					<textarea
+						rows="1"
+						value={selectedMachine.notes ?? ''}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedMachineIndex].notes = (
+										event.currentTarget as HTMLTextAreaElement
+									).value;
+								},
+								{ autosave: true }
+							)}></textarea>
+				</label>
+			</div>
+
+			<section class="modal-section">
+				<div class="section-head">
+					<span class="section-title">Hardware &amp; rack</span>
+					<span class="rule"></span>
+				</div>
+				<div class="field-grid cols-3">
 					<label>
-						Name
+						CPU
 						<input
 							type="text"
-							bind:value={vm.name}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
+							value={selectedMachine.hardware.cpu}
+							on:input={(event) =>
+								mutateDraft(
+									(draft) => {
+										draft.machines[selectedMachineIndex].hardware.cpu = (
+											event.currentTarget as HTMLInputElement
+										).value;
+									},
+									{ autosave: true }
+								)}
 						/>
 					</label>
 					<label>
-						Role
+						RAM
 						<input
 							type="text"
-							bind:value={vm.role}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
+							value={selectedMachine.hardware.ram}
+							on:input={(event) =>
+								mutateDraft(
+									(draft) => {
+										draft.machines[selectedMachineIndex].hardware.ram = (
+											event.currentTarget as HTMLInputElement
+										).value;
+									},
+									{ autosave: true }
+								)}
 						/>
 					</label>
 					<label>
-						IP
+						Ports
 						<input
-							type="text"
-							bind:value={vm.ipAddress}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
+							type="number"
+							min="0"
+							value={selectedMachine.hardware.networkPorts}
+							on:input={(event) =>
+								mutateDraft(
+									(draft) => {
+										const rawValue = (event.currentTarget as HTMLInputElement).value;
+										const parsed = Number(rawValue);
+										draft.machines[selectedMachineIndex].hardware.networkPorts = Number.isFinite(
+											parsed
+										)
+											? parsed
+											: 0;
+									},
+									{ autosave: true }
+								)}
+						/>
+					</label>
+				</div>
+				<div class="field-grid cols-3">
+					<label>
+						Rack
+						<select
+							value={rackNewNameTarget?.kind === 'machine' &&
+							rackNewNameTarget?.index === selectedMachineIndex
+								? '__new__'
+								: (selectedMachine.rack?.name ?? '')}
+							on:change={(event) =>
+								onRackSelectChange(
+									'machine',
+									selectedMachineIndex,
+									(event.currentTarget as HTMLSelectElement).value
+								)}
+						>
+							<option value="">Not racked</option>
+							{#each rackNames as rackName (rackName)}
+								<option value={rackName}>{rackName}</option>
+							{/each}
+							<option value="__new__">New rack…</option>
+						</select>
+					</label>
+					{#if rackNewNameTarget?.kind === 'machine' && rackNewNameTarget?.index === selectedMachineIndex}
+						<label>
+							New rack name
+							<input
+								type="text"
+								placeholder="e.g. Lab Rack"
+								on:change={(event) =>
+									submitNewRackName((event.currentTarget as HTMLInputElement).value)}
+							/>
+						</label>
+					{/if}
+					<label>
+						Bottom U
+						<input
+							type="number"
+							min="1"
+							disabled={!selectedMachine.rack}
+							value={selectedMachine.rack?.unit ?? ''}
+							on:change={(event) =>
+								updateRackField(
+									'machine',
+									selectedMachineIndex,
+									'unit',
+									(event.currentTarget as HTMLInputElement).value
+								)}
 						/>
 					</label>
 					<label>
-						MAC Address
+						Height (U)
 						<input
-							type="text"
-							placeholder="aa:bb:cc:dd:ee:ff"
-							bind:value={vm.macAddress}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
+							type="number"
+							min="1"
+							placeholder="1"
+							disabled={!selectedMachine.rack}
+							value={selectedMachine.rack?.heightU ?? ''}
+							on:change={(event) =>
+								updateRackField(
+									'machine',
+									selectedMachineIndex,
+									'heightU',
+									(event.currentTarget as HTMLInputElement).value
+								)}
 						/>
 					</label>
-					<label>
-						Icon
-						<input
-							type="text"
-							bind:value={vm.iconKey}
-							on:change={() => mutateDraft(() => undefined, { autosave: true })}
-						/>
-					</label>
+				</div>
+			</section>
+
+			<section class="modal-section">
+				<div class="section-head">
+					<span class="section-title">Virtual machines</span>
+					<span class="count-chip">{selectedMachine.software.vms.length}</span>
+					<span class="rule"></span>
+					{#if selectedMachineHostId && selectedMachineVmCount > 0}
+						<label class="mini-toggle" title="Show this machine's VMs on the diagram">
+							<span>Show on diagram</span>
+							<input
+								class="toggle-input"
+								type="checkbox"
+								checked={!isHostCollapsed(selectedMachineHostId)}
+								on:change={toggleSelectedMachineVmVisibility}
+							/>
+							<span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span
+							>
+						</label>
+					{/if}
 					<button
 						type="button"
-						class="danger"
-						on:click={() => openDeleteConfirmation({ type: 'vm', machineIndex: selectedTarget.index, vmIndex })}
+						class="btn-small"
+						on:click={() =>
+							mutateDraft((draft) => {
+								draft.machines[selectedMachineIndex].software.vms.push({
+									...createEmptyVm(),
+									name: nextUniqueName(
+										'New VM',
+										draft.machines[selectedMachineIndex].software.vms.map((vm) => vm.name)
+									),
+									ipAddress: suggestNextFreeIp(draft) ?? createEmptyVm().ipAddress
+								});
+							})}
 					>
-						Delete VM
+						+ Add VM
 					</button>
 				</div>
-			{/each}
-		</section>
+				{#if selectedMachine.software.vms.length > 0}
+					<div class="data-table">
+						<div class="table-head vm-grid">
+							<span></span><span>Name</span><span>Role</span><span>IP</span><span>MAC</span><span
+							></span>
+						</div>
+						{#each selectedMachine.software.vms as vm, vmIndex (vmIndex)}
+							<div
+								class="table-row vm-grid"
+								class:expanded={expandedVmIndex === vmIndex}
+								role="button"
+								tabindex="0"
+								title="Click to edit"
+								on:click={() => toggleExpandedVm(vmIndex)}
+								on:keydown={(event) => rowKeydown(event, () => toggleExpandedVm(vmIndex))}
+							>
+								<span class="row-icon">
+									{#if resolveIconPath(vm.iconKey)}
+										<img src={resolveIconPath(vm.iconKey)} alt="" loading="lazy" />
+									{:else}
+										<span aria-hidden="true">◫</span>
+									{/if}
+								</span>
+								<span class="row-name">{vm.name}</span>
+								<span class="row-muted">{vm.role}</span>
+								<span class="mono">{vm.ipAddress}</span>
+								<span class="mono row-muted">{vm.macAddress || '—'}</span>
+								<button
+									type="button"
+									class="row-trash"
+									title="Delete VM"
+									aria-label={`Delete VM ${vm.name}`}
+									on:click|stopPropagation={() =>
+										openDeleteConfirmation({
+											type: 'vm',
+											machineIndex: selectedMachineIndex,
+											vmIndex
+										})}
+								>
+									🗑
+								</button>
+							</div>
+							{#if expandedVmIndex === vmIndex}
+								<div class="row-expand">
+									<div class="field-grid cols-4">
+										<label>
+											Name
+											<input
+												type="text"
+												bind:value={vm.name}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+										<label>
+											Role
+											<input
+												type="text"
+												bind:value={vm.role}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+										<label>
+											IP
+											<input
+												type="text"
+												class="mono"
+												bind:value={vm.ipAddress}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+										<label>
+											MAC address
+											<input
+												type="text"
+												class="mono"
+												placeholder="aa:bb:cc:dd:ee:ff"
+												bind:value={vm.macAddress}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+									</div>
+									<div class="icon-anchor row-icon-picker">
+										<button
+											type="button"
+											class="btn-small"
+											on:click={() =>
+												(vmIconPopoverIndex = vmIconPopoverIndex === vmIndex ? null : vmIndex)}
+										>
+											{vm.iconKey ? 'Change icon' : 'Choose icon…'}
+										</button>
+										{#if vmIconPopoverIndex === vmIndex}
+											<IconPickerPopover
+												currentIconKey={vm.iconKey || undefined}
+												on:select={(event) =>
+													setVmIconKey(selectedMachineIndex, vmIndex, event.detail)}
+												on:close={() => (vmIconPopoverIndex = null)}
+											/>
+										{/if}
+									</div>
+								</div>
+							{/if}
+						{/each}
+					</div>
+				{/if}
+			</section>
 
-			<section class="edit-section">
-				<h4>Ports</h4>
-				<datalist id="machine-connectable-owner-options">
-					{#each machineConnectableOwnerNames as ownerName (ownerName)}
-						<option value={ownerName}></option>
-					{/each}
-				</datalist>
-				<div class="inline-actions">
+			<section class="modal-section">
+				<div class="section-head">
+					<span class="section-title">Ports &amp; cables</span>
+					<span class="count-chip">{(selectedMachine.ports ?? []).length}</span>
+					<span class="rule"></span>
 					<button
 						type="button"
-					on:click={() =>
-						mutateDraft((draft) => {
-							draft.machines[selectedTarget.index].ports ??= [];
-							draft.machines[selectedTarget.index].ports.push({
-								...createEmptyPort('eth'),
-								portName: nextUniqueName(
-									'eth0',
-									draft.machines[selectedTarget.index].ports.map((port) => port.portName)
-								)
-							});
-						})}
-				>
-					Add Port
-				</button>
-			</div>
-			{#each selectedMachine.ports ?? [] as port, portIndex (`${port.portName}:${portIndex}`)}
-				<div class="item-card">
-					<label>
-						Port Name
-						<input
-							type="text"
-							value={port.portName}
-							on:change={(event) =>
-								updateMachinePortName(selectedTarget.index, portIndex, (event.currentTarget as HTMLInputElement).value)}
-						/>
-					</label>
-					<label>
-						Speed (Gbps)
-						<input
-							type="number"
-							min="0"
-							bind:value={port.speedGbps}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
-						/>
-					</label>
-					<label>
-						MAC Address
-						<input
-							type="text"
-							placeholder="aa:bb:cc:dd:ee:ff"
-							bind:value={port.macAddress}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
-						/>
-					</label>
-						<label>
-							Connect To Device
-							<input
-								type="text"
-								list="machine-connectable-owner-options"
-								value={resolveConnectionDraft('machine', selectedMachine.machineName, port).device}
-								on:change={(event) =>
-									onMachinePortConnectionFieldChange(
-									selectedTarget.index,
-									portIndex,
-									'device',
-									(event.currentTarget as HTMLInputElement).value
-								)}
-						/>
-					</label>
-					<label>
-						Target Port
-						<input
-							type="text"
-							value={resolveConnectionDraft('machine', selectedMachine.machineName, port).port}
-							on:change={(event) =>
-								onMachinePortConnectionFieldChange(
-									selectedTarget.index,
-									portIndex,
-									'port',
-									(event.currentTarget as HTMLInputElement).value
-								)}
-						/>
-					</label>
-					{#if port.connectedTo}
-						<label>
-							Cable Type
-							<input
-								type="text"
-								list="cable-type-options"
-								value={port.connectedTo.cable?.type ?? ''}
-								on:change={(event) =>
-									updatePortCableField(
-										'machine',
-										selectedMachine.machineName,
-										port,
-										'type',
-										(event.currentTarget as HTMLInputElement).value
-									)}
-							/>
-						</label>
-						<label>
-							Cable Colour
-							<input
-								type="text"
-								list="cable-color-options"
-								value={port.connectedTo.cable?.color ?? ''}
-								on:change={(event) =>
-									updatePortCableField(
-										'machine',
-										selectedMachine.machineName,
-										port,
-										'color',
-										(event.currentTarget as HTMLInputElement).value
-									)}
-							/>
-						</label>
-						<label>
-							Cable Length (m)
-							<input
-								type="number"
-								min="0"
-								step="0.5"
-								value={port.connectedTo.cable?.lengthM ?? ''}
-								on:change={(event) =>
-									updatePortCableField(
-										'machine',
-										selectedMachine.machineName,
-										port,
-										'lengthM',
-										(event.currentTarget as HTMLInputElement).value
-									)}
-							/>
-						</label>
-					{/if}
-					<div class="item-actions">
-						<button
-							type="button"
-							on:click={() => {
-								clearConnectionDraft('machine', selectedMachine.machineName, port.portName);
-								updateMachinePortConnection(selectedTarget.index, portIndex, undefined);
-							}}
-						>
-							Disconnect
-						</button>
-						<button
-							type="button"
-							class="danger"
-							on:click={() => {
-								clearConnectionDraft('machine', selectedMachine.machineName, port.portName);
-								applyDraft(deletePort(networkData, 'machine', selectedMachine.machineName, port.portName));
-							}}
-						>
-							Delete Port
-						</button>
-					</div>
+						class="btn-small"
+						on:click={() =>
+							mutateDraft((draft) => {
+								draft.machines[selectedMachineIndex].ports ??= [];
+								draft.machines[selectedMachineIndex].ports.push({
+									...createEmptyPort('eth'),
+									portName: nextUniqueName(
+										'eth0',
+										draft.machines[selectedMachineIndex].ports.map((port) => port.portName)
+									)
+								});
+							})}
+					>
+						+ Add port
+					</button>
 				</div>
-			{/each}
-		</section>
-
-		<div class="modal-footer">
-			<button type="button" class="danger" on:click={() => openDeleteConfirmation({ type: 'machine', index: selectedTarget.index })}>
-				Delete Machine
-			</button>
+				{#if (selectedMachine.ports ?? []).length > 0}
+					<div class="data-table">
+						{#each selectedMachine.ports ?? [] as port, portIndex (portIndex)}
+							<div
+								class="table-row port-grid"
+								class:expanded={expandedPortIndex === portIndex}
+								role="button"
+								tabindex="0"
+								title="Click to edit"
+								on:click={() => toggleExpandedPort(portIndex)}
+								on:keydown={(event) => rowKeydown(event, () => toggleExpandedPort(portIndex))}
+							>
+								<span class="mono row-name">{port.portName}</span>
+								<span class="row-muted">{formatSpeed(port.speedGbps)}</span>
+								<span class="row-connection">
+									{#if port.connectedTo}
+										<span class="row-muted" aria-hidden="true">→</span>
+										{port.connectedTo.device}
+										<span class="mono row-muted">{port.connectedTo.port}</span>
+									{:else}
+										<span class="row-muted">Not connected · click to connect…</span>
+									{/if}
+								</span>
+								<span class="row-cable">
+									{#if port.connectedTo?.cable?.type || port.connectedTo?.cable?.color || typeof port.connectedTo?.cable?.lengthM === 'number'}
+										{#if port.connectedTo.cable?.color}
+											<span
+												class="cable-swatch"
+												style={`background: ${port.connectedTo.cable.color};`}
+											></span>
+										{/if}
+										{[
+											port.connectedTo.cable?.type,
+											typeof port.connectedTo.cable?.lengthM === 'number'
+												? `${port.connectedTo.cable.lengthM}m`
+												: null
+										]
+											.filter(Boolean)
+											.join(' · ') || '—'}
+									{:else}
+										<span class="row-muted">—</span>
+									{/if}
+								</span>
+								<button
+									type="button"
+									class="row-trash"
+									title="Delete port"
+									aria-label={`Delete port ${port.portName}`}
+									on:click|stopPropagation={() => {
+										clearConnectionDraft('machine', selectedMachine.machineName, port.portName);
+										applyDraft(
+											deletePort(networkData, 'machine', selectedMachine.machineName, port.portName)
+										);
+									}}
+								>
+									🗑
+								</button>
+							</div>
+							{#if expandedPortIndex === portIndex}
+								<div class="row-expand">
+									<div class="field-grid cols-3">
+										<label>
+											Port name
+											<input
+												type="text"
+												class="mono"
+												value={port.portName}
+												on:change={(event) =>
+													updateMachinePortName(
+														selectedMachineIndex,
+														portIndex,
+														(event.currentTarget as HTMLInputElement).value
+													)}
+											/>
+										</label>
+										<label>
+											Speed (Gbps)
+											<input
+												type="number"
+												min="0"
+												bind:value={port.speedGbps}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+										<label>
+											MAC address
+											<input
+												type="text"
+												class="mono"
+												placeholder="aa:bb:cc:dd:ee:ff"
+												bind:value={port.macAddress}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+									</div>
+									<div class="field-grid cols-2">
+										<label>
+											Connect to device
+											<input
+												type="text"
+												list="machine-connectable-owner-options"
+												value={resolveConnectionDraft('machine', selectedMachine.machineName, port)
+													.device}
+												on:change={(event) =>
+													onMachinePortConnectionFieldChange(
+														selectedMachineIndex,
+														portIndex,
+														'device',
+														(event.currentTarget as HTMLInputElement).value
+													)}
+											/>
+										</label>
+										<label>
+											Target port
+											<input
+												type="text"
+												class="mono"
+												value={resolveConnectionDraft('machine', selectedMachine.machineName, port)
+													.port}
+												on:change={(event) =>
+													onMachinePortConnectionFieldChange(
+														selectedMachineIndex,
+														portIndex,
+														'port',
+														(event.currentTarget as HTMLInputElement).value
+													)}
+											/>
+										</label>
+									</div>
+									{#if port.connectedTo}
+										<div class="field-grid cols-3">
+											<label>
+												Cable type
+												<input
+													type="text"
+													list="cable-type-options"
+													value={port.connectedTo.cable?.type ?? ''}
+													on:change={(event) =>
+														updatePortCableField(
+															'machine',
+															selectedMachine.machineName,
+															port,
+															'type',
+															(event.currentTarget as HTMLInputElement).value
+														)}
+												/>
+											</label>
+											<label>
+												Cable colour
+												<input
+													type="text"
+													list="cable-color-options"
+													value={port.connectedTo.cable?.color ?? ''}
+													on:change={(event) =>
+														updatePortCableField(
+															'machine',
+															selectedMachine.machineName,
+															port,
+															'color',
+															(event.currentTarget as HTMLInputElement).value
+														)}
+												/>
+											</label>
+											<label>
+												Cable length (m)
+												<input
+													type="number"
+													min="0"
+													step="0.5"
+													value={port.connectedTo.cable?.lengthM ?? ''}
+													on:change={(event) =>
+														updatePortCableField(
+															'machine',
+															selectedMachine.machineName,
+															port,
+															'lengthM',
+															(event.currentTarget as HTMLInputElement).value
+														)}
+												/>
+											</label>
+										</div>
+										<div class="row-expand-actions">
+											<button
+												type="button"
+												class="btn-small"
+												on:click={() => {
+													clearConnectionDraft(
+														'machine',
+														selectedMachine.machineName,
+														port.portName
+													);
+													updateMachinePortConnection(selectedMachineIndex, portIndex, undefined);
+												}}
+											>
+												Disconnect
+											</button>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						{/each}
+					</div>
+				{/if}
+			</section>
 		</div>
 	{:else if selectedTarget?.type === 'device' && selectedDevice}
-		<section class="edit-section">
-			<label>
-				Device Name
-				<input
-					type="text"
-					value={selectedDevice.name}
-					on:change={(event) =>
-						updateDeviceName(selectedTarget.index, (event.currentTarget as HTMLInputElement).value)}
-				/>
-			</label>
-			<label>
-				IP Address
-				<input
-					type="text"
-					value={selectedDevice.ipAddress}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.devices[selectedTarget.index].ipAddress = (
-									event.currentTarget as HTMLInputElement
-								).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-				{#if selectedDeviceIpConflicts.length > 0}
-					<span class="ip-conflict-hint">Also used by {selectedDeviceIpConflicts.join(', ')}</span>
-				{/if}
-			</label>
-			<label>
-				Type
-				<input
-					type="text"
-					value={selectedDevice.type}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.devices[selectedTarget.index].type = (
-									event.currentTarget as HTMLInputElement
-								).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
-			<label>
-				Notes
-				<textarea
-					value={selectedDevice.notes ?? ''}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.devices[selectedTarget.index].notes = (
-									event.currentTarget as HTMLTextAreaElement
-								).value;
-							},
-							{ autosave: true }
-						)}
-				></textarea>
-			</label>
-		</section>
-
-		<section class="edit-section">
-			<h4>Rack</h4>
-			<div class="field-row">
+		<div class="modal-sections">
+			<div class="field-grid cols-3">
 				<label>
-					Rack
-					<select
-						value={rackNewNameTarget?.kind === 'device' &&
-						rackNewNameTarget?.index === selectedTarget.index
-							? '__new__'
-							: (selectedDevice.rack?.name ?? '')}
-						on:change={(event) =>
-							onRackSelectChange(
-								'device',
-								selectedTarget.index,
-								(event.currentTarget as HTMLSelectElement).value
-							)}
-					>
-						<option value="">Not racked</option>
-						{#each rackNames as rackName (rackName)}
-							<option value={rackName}>{rackName}</option>
-						{/each}
-						<option value="__new__">New rack…</option>
-					</select>
-				</label>
-				{#if rackNewNameTarget?.kind === 'device' && rackNewNameTarget?.index === selectedTarget.index}
-					<label>
-						New Rack Name
-						<input
-							type="text"
-							placeholder="e.g. Lab Rack"
-							on:change={(event) =>
-								submitNewRackName((event.currentTarget as HTMLInputElement).value)}
-						/>
-					</label>
-				{/if}
-				<label>
-					Bottom U
+					Name
 					<input
-						type="number"
-						min="1"
-						disabled={!selectedDevice.rack}
-						value={selectedDevice.rack?.unit ?? ''}
+						type="text"
+						value={selectedDevice.name}
 						on:change={(event) =>
-							updateRackField(
-								'device',
-								selectedTarget.index,
-								'unit',
+							updateDeviceName(
+								selectedDeviceIndex,
 								(event.currentTarget as HTMLInputElement).value
 							)}
 					/>
 				</label>
 				<label>
-					Height (U)
+					IP address
 					<input
-						type="number"
-						min="1"
-						placeholder="1"
-						disabled={!selectedDevice.rack}
-						value={selectedDevice.rack?.heightU ?? ''}
-						on:change={(event) =>
-							updateRackField(
-								'device',
-								selectedTarget.index,
-								'heightU',
-								(event.currentTarget as HTMLInputElement).value
+						type="text"
+						class="mono"
+						value={selectedDevice.ipAddress}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.devices[selectedDeviceIndex].ipAddress = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+					{#if selectedDeviceIpConflicts.length > 0}
+						<span class="ip-conflict-hint">Also used by {selectedDeviceIpConflicts.join(', ')}</span
+						>
+					{/if}
+				</label>
+				<label>
+					Type
+					<input
+						type="text"
+						value={selectedDevice.type}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.devices[selectedDeviceIndex].type = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
 							)}
 					/>
 				</label>
 			</div>
-		</section>
-
-			<section class="edit-section">
-				<h4>Ports</h4>
-				<datalist id="device-connectable-owner-options">
-					{#each deviceConnectableOwnerNames as ownerName (ownerName)}
-						<option value={ownerName}></option>
-					{/each}
-				</datalist>
-				<div class="inline-actions">
-					<button
-						type="button"
-					on:click={() =>
-						mutateDraft((draft) => {
-							draft.devices[selectedTarget.index].ports ??= [];
-							draft.devices[selectedTarget.index].ports.push({
-								...createEmptyPort('port'),
-								portName: nextUniqueName(
-									'port0',
-									draft.devices[selectedTarget.index].ports.map((port) => port.portName)
-								)
-							});
-						})}
-				>
-					Add Port
-				</button>
+			<div class="field-grid cols-1">
+				<label>
+					Notes
+					<textarea
+						rows="1"
+						value={selectedDevice.notes ?? ''}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.devices[selectedDeviceIndex].notes = (
+										event.currentTarget as HTMLTextAreaElement
+									).value;
+								},
+								{ autosave: true }
+							)}></textarea>
+				</label>
 			</div>
-			{#each selectedDevice.ports ?? [] as port, portIndex (`${port.portName}:${portIndex}`)}
-				<div class="item-card">
+
+			<section class="modal-section">
+				<div class="section-head">
+					<span class="section-title">Rack</span>
+					<span class="rule"></span>
+				</div>
+				<div class="field-grid cols-3">
 					<label>
-						Port Name
-						<input
-							type="text"
-							value={port.portName}
+						Rack
+						<select
+							value={rackNewNameTarget?.kind === 'device' &&
+							rackNewNameTarget?.index === selectedDeviceIndex
+								? '__new__'
+								: (selectedDevice.rack?.name ?? '')}
 							on:change={(event) =>
-								updateDevicePortName(selectedTarget.index, portIndex, (event.currentTarget as HTMLInputElement).value)}
-						/>
-					</label>
-					<label>
-						Speed (Gbps)
-						<input
-							type="number"
-							min="0"
-							bind:value={port.speedGbps}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
-						/>
-					</label>
-					<label>
-						MAC Address
-						<input
-							type="text"
-							placeholder="aa:bb:cc:dd:ee:ff"
-							bind:value={port.macAddress}
-							on:input={() => mutateDraft(() => undefined, { autosave: true })}
-						/>
-					</label>
-						<label>
-							Connect To Device
-							<input
-								type="text"
-								list="device-connectable-owner-options"
-								value={resolveConnectionDraft('device', selectedDevice.name, port).device}
-								on:change={(event) =>
-									onDevicePortConnectionFieldChange(
-									selectedTarget.index,
-									portIndex,
+								onRackSelectChange(
 									'device',
-									(event.currentTarget as HTMLInputElement).value
+									selectedDeviceIndex,
+									(event.currentTarget as HTMLSelectElement).value
 								)}
-						/>
+						>
+							<option value="">Not racked</option>
+							{#each rackNames as rackName (rackName)}
+								<option value={rackName}>{rackName}</option>
+							{/each}
+							<option value="__new__">New rack…</option>
+						</select>
 					</label>
-					<label>
-						Target Port
-						<input
-							type="text"
-							value={resolveConnectionDraft('device', selectedDevice.name, port).port}
-							on:change={(event) =>
-								onDevicePortConnectionFieldChange(
-									selectedTarget.index,
-									portIndex,
-									'port',
-									(event.currentTarget as HTMLInputElement).value
-								)}
-						/>
-					</label>
-					{#if port.connectedTo}
+					{#if rackNewNameTarget?.kind === 'device' && rackNewNameTarget?.index === selectedDeviceIndex}
 						<label>
-							Cable Type
+							New rack name
 							<input
 								type="text"
-								list="cable-type-options"
-								value={port.connectedTo.cable?.type ?? ''}
+								placeholder="e.g. Lab Rack"
 								on:change={(event) =>
-									updatePortCableField(
-										'device',
-										selectedDevice.name,
-										port,
-										'type',
-										(event.currentTarget as HTMLInputElement).value
-									)}
-							/>
-						</label>
-						<label>
-							Cable Colour
-							<input
-								type="text"
-								list="cable-color-options"
-								value={port.connectedTo.cable?.color ?? ''}
-								on:change={(event) =>
-									updatePortCableField(
-										'device',
-										selectedDevice.name,
-										port,
-										'color',
-										(event.currentTarget as HTMLInputElement).value
-									)}
-							/>
-						</label>
-						<label>
-							Cable Length (m)
-							<input
-								type="number"
-								min="0"
-								step="0.5"
-								value={port.connectedTo.cable?.lengthM ?? ''}
-								on:change={(event) =>
-									updatePortCableField(
-										'device',
-										selectedDevice.name,
-										port,
-										'lengthM',
-										(event.currentTarget as HTMLInputElement).value
-									)}
+									submitNewRackName((event.currentTarget as HTMLInputElement).value)}
 							/>
 						</label>
 					{/if}
-					<div class="item-actions">
-						<button
-							type="button"
-							on:click={() => {
-								clearConnectionDraft('device', selectedDevice.name, port.portName);
-								updateDevicePortConnection(selectedTarget.index, portIndex, undefined);
-							}}
-						>
-							Disconnect
-						</button>
-						<button
-							type="button"
-							class="danger"
-							on:click={() => {
-								clearConnectionDraft('device', selectedDevice.name, port.portName);
-								applyDraft(deletePort(networkData, 'device', selectedDevice.name, port.portName));
-							}}
-						>
-							Delete Port
-						</button>
-					</div>
+					<label>
+						Bottom U
+						<input
+							type="number"
+							min="1"
+							disabled={!selectedDevice.rack}
+							value={selectedDevice.rack?.unit ?? ''}
+							on:change={(event) =>
+								updateRackField(
+									'device',
+									selectedDeviceIndex,
+									'unit',
+									(event.currentTarget as HTMLInputElement).value
+								)}
+						/>
+					</label>
+					<label>
+						Height (U)
+						<input
+							type="number"
+							min="1"
+							placeholder="1"
+							disabled={!selectedDevice.rack}
+							value={selectedDevice.rack?.heightU ?? ''}
+							on:change={(event) =>
+								updateRackField(
+									'device',
+									selectedDeviceIndex,
+									'heightU',
+									(event.currentTarget as HTMLInputElement).value
+								)}
+						/>
+					</label>
 				</div>
-			{/each}
-		</section>
+			</section>
 
-		<div class="modal-footer">
-			<button type="button" class="danger" on:click={() => openDeleteConfirmation({ type: 'device', index: selectedTarget.index })}>
-				Delete Device
-			</button>
+			<section class="modal-section">
+				<div class="section-head">
+					<span class="section-title">Ports &amp; cables</span>
+					<span class="count-chip">{(selectedDevice.ports ?? []).length}</span>
+					<span class="rule"></span>
+					<button
+						type="button"
+						class="btn-small"
+						on:click={() =>
+							mutateDraft((draft) => {
+								draft.devices[selectedDeviceIndex].ports ??= [];
+								draft.devices[selectedDeviceIndex].ports.push({
+									...createEmptyPort('port'),
+									portName: nextUniqueName(
+										'port0',
+										draft.devices[selectedDeviceIndex].ports.map((port) => port.portName)
+									)
+								});
+							})}
+					>
+						+ Add port
+					</button>
+				</div>
+				{#if (selectedDevice.ports ?? []).length > 0}
+					<div class="data-table">
+						{#each selectedDevice.ports ?? [] as port, portIndex (portIndex)}
+							<div
+								class="table-row port-grid"
+								class:expanded={expandedPortIndex === portIndex}
+								role="button"
+								tabindex="0"
+								title="Click to edit"
+								on:click={() => toggleExpandedPort(portIndex)}
+								on:keydown={(event) => rowKeydown(event, () => toggleExpandedPort(portIndex))}
+							>
+								<span class="mono row-name">{port.portName}</span>
+								<span class="row-muted">{formatSpeed(port.speedGbps)}</span>
+								<span class="row-connection">
+									{#if port.connectedTo}
+										<span class="row-muted" aria-hidden="true">→</span>
+										{port.connectedTo.device}
+										<span class="mono row-muted">{port.connectedTo.port}</span>
+									{:else}
+										<span class="row-muted">Not connected · click to connect…</span>
+									{/if}
+								</span>
+								<span class="row-cable">
+									{#if port.connectedTo?.cable?.type || port.connectedTo?.cable?.color || typeof port.connectedTo?.cable?.lengthM === 'number'}
+										{#if port.connectedTo.cable?.color}
+											<span
+												class="cable-swatch"
+												style={`background: ${port.connectedTo.cable.color};`}
+											></span>
+										{/if}
+										{[
+											port.connectedTo.cable?.type,
+											typeof port.connectedTo.cable?.lengthM === 'number'
+												? `${port.connectedTo.cable.lengthM}m`
+												: null
+										]
+											.filter(Boolean)
+											.join(' · ') || '—'}
+									{:else}
+										<span class="row-muted">—</span>
+									{/if}
+								</span>
+								<button
+									type="button"
+									class="row-trash"
+									title="Delete port"
+									aria-label={`Delete port ${port.portName}`}
+									on:click|stopPropagation={() => {
+										clearConnectionDraft('device', selectedDevice.name, port.portName);
+										applyDraft(
+											deletePort(networkData, 'device', selectedDevice.name, port.portName)
+										);
+									}}
+								>
+									🗑
+								</button>
+							</div>
+							{#if expandedPortIndex === portIndex}
+								<div class="row-expand">
+									<div class="field-grid cols-3">
+										<label>
+											Port name
+											<input
+												type="text"
+												class="mono"
+												value={port.portName}
+												on:change={(event) =>
+													updateDevicePortName(
+														selectedDeviceIndex,
+														portIndex,
+														(event.currentTarget as HTMLInputElement).value
+													)}
+											/>
+										</label>
+										<label>
+											Speed (Gbps)
+											<input
+												type="number"
+												min="0"
+												bind:value={port.speedGbps}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+										<label>
+											MAC address
+											<input
+												type="text"
+												class="mono"
+												placeholder="aa:bb:cc:dd:ee:ff"
+												bind:value={port.macAddress}
+												on:input={() => mutateDraft(() => undefined, { autosave: true })}
+											/>
+										</label>
+									</div>
+									<div class="field-grid cols-2">
+										<label>
+											Connect to device
+											<input
+												type="text"
+												list="device-connectable-owner-options"
+												value={resolveConnectionDraft('device', selectedDevice.name, port).device}
+												on:change={(event) =>
+													onDevicePortConnectionFieldChange(
+														selectedDeviceIndex,
+														portIndex,
+														'device',
+														(event.currentTarget as HTMLInputElement).value
+													)}
+											/>
+										</label>
+										<label>
+											Target port
+											<input
+												type="text"
+												class="mono"
+												value={resolveConnectionDraft('device', selectedDevice.name, port).port}
+												on:change={(event) =>
+													onDevicePortConnectionFieldChange(
+														selectedDeviceIndex,
+														portIndex,
+														'port',
+														(event.currentTarget as HTMLInputElement).value
+													)}
+											/>
+										</label>
+									</div>
+									{#if port.connectedTo}
+										<div class="field-grid cols-3">
+											<label>
+												Cable type
+												<input
+													type="text"
+													list="cable-type-options"
+													value={port.connectedTo.cable?.type ?? ''}
+													on:change={(event) =>
+														updatePortCableField(
+															'device',
+															selectedDevice.name,
+															port,
+															'type',
+															(event.currentTarget as HTMLInputElement).value
+														)}
+												/>
+											</label>
+											<label>
+												Cable colour
+												<input
+													type="text"
+													list="cable-color-options"
+													value={port.connectedTo.cable?.color ?? ''}
+													on:change={(event) =>
+														updatePortCableField(
+															'device',
+															selectedDevice.name,
+															port,
+															'color',
+															(event.currentTarget as HTMLInputElement).value
+														)}
+												/>
+											</label>
+											<label>
+												Cable length (m)
+												<input
+													type="number"
+													min="0"
+													step="0.5"
+													value={port.connectedTo.cable?.lengthM ?? ''}
+													on:change={(event) =>
+														updatePortCableField(
+															'device',
+															selectedDevice.name,
+															port,
+															'lengthM',
+															(event.currentTarget as HTMLInputElement).value
+														)}
+												/>
+											</label>
+										</div>
+										<div class="row-expand-actions">
+											<button
+												type="button"
+												class="btn-small"
+												on:click={() => {
+													clearConnectionDraft('device', selectedDevice.name, port.portName);
+													updateDevicePortConnection(selectedDeviceIndex, portIndex, undefined);
+												}}
+											>
+												Disconnect
+											</button>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						{/each}
+					</div>
+				{/if}
+			</section>
 		</div>
 	{:else if selectedTarget?.type === 'vm' && selectedVm}
-		<section class="edit-section">
-			<label>
-				VM Name
-				<input
-					type="text"
-					value={selectedVm.name}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.machineIndex].software.vms[
-									selectedTarget.vmIndex
-								].name = (event.currentTarget as HTMLInputElement).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
-			<label>
-				Role
-				<input
-					type="text"
-					value={selectedVm.role}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.machineIndex].software.vms[
-									selectedTarget.vmIndex
-								].role = (event.currentTarget as HTMLInputElement).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
-			<label>
-				IP Address
-				<input
-					type="text"
-					value={selectedVm.ipAddress}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.machineIndex].software.vms[
-									selectedTarget.vmIndex
-								].ipAddress = (event.currentTarget as HTMLInputElement).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-				{#if selectedVmIpConflicts.length > 0}
-					<span class="ip-conflict-hint">Also used by {selectedVmIpConflicts.join(', ')}</span>
-				{/if}
-			</label>
-			<label>
-				MAC Address
-				<input
-					type="text"
-					placeholder="aa:bb:cc:dd:ee:ff"
-					value={selectedVm.macAddress ?? ''}
-					on:input={(event) =>
-						mutateDraft(
-							(draft) => {
-								draft.machines[selectedTarget.machineIndex].software.vms[
-									selectedTarget.vmIndex
-								].macAddress = (event.currentTarget as HTMLInputElement).value;
-							},
-							{ autosave: true }
-						)}
-				/>
-			</label>
-		</section>
-		<div class="modal-footer">
+		<div class="modal-sections">
+			<div class="field-grid cols-2">
+				<label>
+					Name
+					<input
+						type="text"
+						value={selectedVm.name}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedVmMachineIndex].software.vms[selectedVmIndex].name = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+				</label>
+				<label>
+					Role
+					<input
+						type="text"
+						value={selectedVm.role}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedVmMachineIndex].software.vms[selectedVmIndex].role = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+				</label>
+			</div>
+			<div class="field-grid cols-2">
+				<label>
+					IP address
+					<input
+						type="text"
+						class="mono"
+						value={selectedVm.ipAddress}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedVmMachineIndex].software.vms[selectedVmIndex].ipAddress = (
+										event.currentTarget as HTMLInputElement
+									).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+					{#if selectedVmIpConflicts.length > 0}
+						<span class="ip-conflict-hint">Also used by {selectedVmIpConflicts.join(', ')}</span>
+					{/if}
+				</label>
+				<label>
+					MAC address
+					<input
+						type="text"
+						class="mono"
+						placeholder="aa:bb:cc:dd:ee:ff"
+						value={selectedVm.macAddress ?? ''}
+						on:input={(event) =>
+							mutateDraft(
+								(draft) => {
+									draft.machines[selectedVmMachineIndex].software.vms[selectedVmIndex].macAddress =
+										(event.currentTarget as HTMLInputElement).value;
+								},
+								{ autosave: true }
+							)}
+					/>
+				</label>
+			</div>
+		</div>
+	{/if}
+
+	<svelte:fragment slot="footer">
+		{#if selectedTarget?.type === 'machine'}
 			<button
 				type="button"
-				class="danger"
+				class="btn-danger-quiet"
+				on:click={() => openDeleteConfirmation({ type: 'machine', index: selectedMachineIndex })}
+			>
+				Delete machine…
+			</button>
+		{:else if selectedTarget?.type === 'device'}
+			<button
+				type="button"
+				class="btn-danger-quiet"
+				on:click={() => openDeleteConfirmation({ type: 'device', index: selectedDeviceIndex })}
+			>
+				Delete device…
+			</button>
+		{:else if selectedTarget?.type === 'vm'}
+			<button
+				type="button"
+				class="btn-danger-quiet"
 				on:click={() =>
 					openDeleteConfirmation({
 						type: 'vm',
-						machineIndex: selectedTarget.machineIndex,
-						vmIndex: selectedTarget.vmIndex
+						machineIndex: selectedVmMachineIndex,
+						vmIndex: selectedVmIndex
 					})}
 			>
-				Delete VM
+				Delete VM…
 			</button>
-		</div>
-	{/if}
+		{/if}
+		<span class="footer-spacer"></span>
+		<span class="footer-hint">
+			{writable ? 'Changes save automatically' : 'Read-only — changes are not saved'}
+		</span>
+		<button type="button" class="btn-primary-modal" on:click={closeSelectedTargetModal}>
+			Done
+		</button>
+	</svelte:fragment>
 </Modal>
 
-<Modal
-	isOpen={addModalKind !== null}
-	title={addModalKind === 'machine' ? 'Add Machine' : 'Add Device'}
-	maxWidth="760px"
-	on:close={closeAddEntityModal}
->
-	{#if addModalIconKey && !iconPickerExpanded}
-		<div class="icon-search-collapsed">
-			<div class="icon-preview-card">
-				{#if addModalIconPath}
-					<img src={addModalIconPath} alt="Selected icon preview" loading="lazy" />
+<Modal isOpen={addModalKind !== null} maxWidth="560px" on:close={closeAddEntityModal}>
+	<svelte:fragment slot="header">
+		<div class="entity-header">
+			<div class="icon-anchor">
+				<button
+					type="button"
+					class="icon-btn"
+					title="Choose icon"
+					aria-label="Choose icon"
+					on:click={() => (iconPopoverOpen = !iconPopoverOpen)}
+				>
+					{#if addModalIconPath}
+						<img src={addModalIconPath} alt="" loading="lazy" />
+					{:else}
+						<span aria-hidden="true">⬢</span>
+					{/if}
+				</button>
+				{#if iconPopoverOpen}
+					<IconPickerPopover
+						currentIconKey={addModalIconKey || undefined}
+						on:select={(event) => setAddModalIconKey(event.detail)}
+						on:close={() => (iconPopoverOpen = false)}
+					/>
 				{/if}
-				<code>{addModalIconKey}</code>
 			</div>
-			<button type="button" on:click={() => (iconPickerExpanded = true)}>Change Icon</button>
-		</div>
-	{:else}
-		<div class="icon-search">
-			<label>
-				Icon Search
-				<input
-					type="text"
-					bind:value={iconSearch}
-					placeholder="Search icons..."
-					autocomplete="off"
-				/>
-			</label>
-			{#if addModalIconPath}
-				<div class="icon-preview-card">
-					<img src={addModalIconPath} alt="Selected icon preview" loading="lazy" />
-					<code>{addModalIconKey}</code>
-					<button type="button" class="icon-collapse" on:click={() => (iconPickerExpanded = false)}>
-						Done
-					</button>
+			<div class="entity-id">
+				<div class="entity-name-row">
+					<span class="entity-name">
+						{addModalKind === 'machine' ? 'Add machine' : 'Add device'}
+					</span>
 				</div>
-			{/if}
-			<p class="icon-results-meta">
-				Showing {Math.min(visibleIconDefinitions.length, iconResultLimit)} of {filteredIconDefinitions.length}
-				matching icons
-			</p>
-			<div class="icon-results-grid">
-				{#each visibleIconDefinitions as icon (icon.key)}
-					<button
-						type="button"
-						class="icon-result-option"
-						on:click={() => setAddModalIconKey(icon.key)}
-						title={icon.key}
-					>
-						<img src={icon.path} alt={icon.label} loading="lazy" />
-						<span>{icon.label}</span>
-						<code>{icon.key}</code>
-					</button>
-				{/each}
+				<span class="entity-meta">Pick an icon, name it, give it an IP</span>
 			</div>
-			{#if filteredIconDefinitions.length === 0}
-				<p class="icon-results-empty">No icons match your search.</p>
-			{/if}
 		</div>
-	{/if}
+	</svelte:fragment>
+
 	{#if addModalKind === 'machine'}
-		<section class="edit-section">
-			<label>
-				Machine Name
-				<input type="text" bind:value={newMachineDraft.machineName} />
-			</label>
-			<label>
-				IP Address
-				<span class="ip-suggest-row">
-					<input type="text" bind:value={newMachineDraft.ipAddress} />
-					<button type="button" on:click={suggestIpForAddModal}>Suggest</button>
-				</span>
-			</label>
-			<label>
-				Role
-				<input type="text" bind:value={newMachineDraft.role} />
-			</label>
-			<label>
-				Operating System
-				<input type="text" bind:value={newMachineDraft.operatingSystem} />
-			</label>
-			<label>
-				Notes
-				<textarea bind:value={newMachineDraft.notes}></textarea>
-			</label>
-		</section>
+		<div class="modal-sections">
+			<div class="field-grid cols-2">
+				<label>
+					Name
+					<input type="text" bind:value={newMachineDraft.machineName} />
+				</label>
+				<label>
+					IP address
+					<span class="ip-suggest-row">
+						<input type="text" class="mono" bind:value={newMachineDraft.ipAddress} />
+						<button type="button" class="btn-small" on:click={suggestIpForAddModal}>Suggest</button>
+					</span>
+				</label>
+			</div>
+			<div class="field-grid cols-2">
+				<label>
+					Role
+					<input type="text" bind:value={newMachineDraft.role} />
+				</label>
+				<label>
+					Operating system
+					<input type="text" bind:value={newMachineDraft.operatingSystem} />
+				</label>
+			</div>
+			<div class="field-grid cols-1">
+				<label>
+					Notes
+					<textarea rows="1" bind:value={newMachineDraft.notes}></textarea>
+				</label>
+			</div>
+		</div>
 	{:else if addModalKind === 'device'}
-		<section class="edit-section">
-			<label>
-				Device Name
-				<input type="text" bind:value={newDeviceDraft.name} />
-			</label>
-			<label>
-				IP Address
-				<span class="ip-suggest-row">
-					<input type="text" bind:value={newDeviceDraft.ipAddress} />
-					<button type="button" on:click={suggestIpForAddModal}>Suggest</button>
-				</span>
-			</label>
-			<label>
-				Type
-				<input type="text" bind:value={newDeviceDraft.type} />
-			</label>
-			<label>
-				Notes
-				<textarea bind:value={newDeviceDraft.notes}></textarea>
-			</label>
-		</section>
+		<div class="modal-sections">
+			<div class="field-grid cols-2">
+				<label>
+					Name
+					<input type="text" bind:value={newDeviceDraft.name} />
+				</label>
+				<label>
+					IP address
+					<span class="ip-suggest-row">
+						<input type="text" class="mono" bind:value={newDeviceDraft.ipAddress} />
+						<button type="button" class="btn-small" on:click={suggestIpForAddModal}>Suggest</button>
+					</span>
+				</label>
+			</div>
+			<div class="field-grid cols-2">
+				<label>
+					Type
+					<input type="text" bind:value={newDeviceDraft.type} />
+				</label>
+				<label>
+					Notes
+					<textarea rows="1" bind:value={newDeviceDraft.notes}></textarea>
+				</label>
+			</div>
+		</div>
 	{/if}
 
-	<div class="modal-footer">
-		<button type="button" on:click={submitAddEntity}>Add</button>
-	</div>
+	<svelte:fragment slot="footer">
+		<span class="footer-spacer"></span>
+		<button type="button" class="btn-primary-modal" on:click={submitAddEntity}>
+			{addModalKind === 'machine' ? 'Add machine' : 'Add device'}
+		</button>
+	</svelte:fragment>
 </Modal>
 
 <Modal
 	isOpen={deleteTarget !== null}
-	title="Confirm Delete"
-	maxWidth="520px"
+	title="Confirm delete"
+	maxWidth="440px"
 	on:close={() => (deleteTarget = null)}
 >
-	<p>This action will remove the selected item and clean up related links. Continue?</p>
-	<div class="modal-footer">
-		<button type="button" class="danger" on:click={confirmDelete}>Delete</button>
-		<button type="button" on:click={() => (deleteTarget = null)}>Cancel</button>
-	</div>
+	<p class="confirm-copy">
+		This will remove the selected item and clean up related links. Continue?
+	</p>
+	<svelte:fragment slot="footer">
+		<span class="footer-spacer"></span>
+		<button type="button" class="btn-small" on:click={() => (deleteTarget = null)}>Cancel</button>
+		<button type="button" class="btn-danger-fill" on:click={confirmDelete}>Delete</button>
+	</svelte:fragment>
 </Modal>
 
-<Modal isOpen={showExportModal} title="Export PNG" maxWidth="520px" on:close={() => (showExportModal = false)}>
-	<section class="edit-section">
-		<label>
-			File Name
-			<input type="text" bind:value={exportFileName} />
-		</label>
-		<label>
-			Scale
-			<select bind:value={exportScale}>
-				<option value={1}>1x</option>
-				<option value={2}>2x</option>
-				<option value={3}>3x</option>
-			</select>
-		</label>
-		<label>
-			Background
-			<select bind:value={exportBackground}>
-				<option value="theme">Match Theme</option>
-				<option value="transparent">Transparent</option>
-			</select>
-		</label>
-	</section>
-	<div class="modal-footer">
-		<button type="button" on:click={exportPng}>Download PNG</button>
+<Modal
+	isOpen={showExportModal}
+	title="Export PNG"
+	maxWidth="440px"
+	on:close={() => (showExportModal = false)}
+>
+	<div class="modal-sections">
+		<div class="field-grid cols-1">
+			<label>
+				File name
+				<input type="text" bind:value={exportFileName} />
+			</label>
+		</div>
+		<div class="field-grid cols-2">
+			<label>
+				Scale
+				<select bind:value={exportScale}>
+					<option value={1}>1x</option>
+					<option value={2}>2x</option>
+					<option value={3}>3x</option>
+				</select>
+			</label>
+			<label>
+				Background
+				<select bind:value={exportBackground}>
+					<option value="theme">Match theme</option>
+					<option value="transparent">Transparent</option>
+				</select>
+			</label>
+		</div>
 	</div>
+	<svelte:fragment slot="footer">
+		<span class="footer-spacer"></span>
+		<button type="button" class="btn-primary-modal" disabled={isExportingPng} on:click={exportPng}>
+			{isExportingPng ? 'Exporting…' : 'Download PNG'}
+		</button>
+	</svelte:fragment>
 </Modal>
 
 <style>
 	.diagram-shell {
-		display: grid;
-		grid-template-rows: minmax(580px, 1fr) auto;
-		gap: 0.75rem;
-		padding: 0.75rem;
-		height: calc(100vh - 2rem);
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
 	}
 
 	.diagram-stage {
 		position: relative;
-		min-height: 580px;
-		border: 1px solid var(--panel-border);
-		border-radius: 10px;
-		background: linear-gradient(180deg, var(--panel-bg) 0%, color-mix(in oklab, var(--panel-bg) 88%, black 12%) 100%);
+		flex: 1;
+		min-height: 0;
+		background: var(--bg-canvas);
 		overflow: hidden;
 	}
 
@@ -3497,73 +3903,6 @@
 		inset: 0;
 	}
 
-	.map-controls-shell {
-		position: absolute;
-		top: 0.75rem;
-		right: 0.75rem;
-		z-index: 14;
-	}
-
-	.map-controls {
-		display: flex;
-		gap: 0.4rem;
-		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
-		border: 1px solid var(--panel-border);
-		border-radius: 10px;
-		padding: 0.4rem;
-		padding-right: 2.2rem;
-		flex-wrap: wrap;
-		max-width: min(84vw, 760px);
-		position: relative;
-	}
-
-	.controls-toggle {
-		display: flex;
-		gap: 0.4rem;
-		border: 1px solid var(--panel-border);
-		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
-		color: var(--panel-contrast);
-		padding: 0.35rem 0.55rem;
-		border-radius: 10px;
-		font-size: 0.8rem;
-		font-weight: 600;
-		cursor: pointer;
-	}
-
-	.controls-collapse-tab {
-		position: absolute;
-		top: 50%;
-		right: -0.95rem;
-		transform: translateY(-50%);
-		width: 1.9rem;
-		height: 2.1rem;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		border: 1px solid var(--panel-border);
-		border-radius: 0 9px 9px 0;
-		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
-		color: var(--panel-contrast);
-		font-size: 1.2rem;
-		font-weight: 700;
-		line-height: 1;
-		cursor: pointer;
-		box-shadow: 0 4px 14px rgba(15, 23, 42, 0.22);
-	}
-
-	.controls-collapse-tab:hover {
-		background: color-mix(in oklab, var(--panel-bg) 82%, #3b82f6 18%);
-	}
-
-	.controls-collapse-tab:focus-visible {
-		outline: 2px solid #60a5fa;
-		outline-offset: 2px;
-	}
-
-	.map-controls button,
-	.map-controls select,
-	.modal-footer button,
-	.item-actions button,
 	.inline-actions button {
 		border: 1px solid var(--panel-border);
 		background: var(--panel-bg);
@@ -3575,87 +3914,24 @@
 		cursor: pointer;
 	}
 
-	.map-controls select {
-		min-width: 13.5rem;
-	}
-
-	.search-control {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.3rem;
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		padding: 0.2rem 0.35rem;
-		border-radius: 7px;
-	}
-
-	.search-control input {
-		border: none;
-		background: transparent;
-		color: var(--panel-contrast);
-		font-size: 0.8rem;
-		font-weight: 600;
-		width: 10.5rem;
-		outline: none;
-	}
-
-	.search-control input::placeholder {
-		color: color-mix(in oklab, var(--panel-contrast) 55%, transparent 45%);
-		font-weight: 500;
-	}
-
-	.search-control:focus-within {
-		border-color: #60a5fa;
-	}
-
-	.search-count {
-		font-size: 0.72rem;
-		font-weight: 700;
-		color: #f59e0b;
-		min-width: 1.1rem;
-		text-align: center;
-	}
-
-	.search-clear {
-		border: none;
-		background: transparent;
-		color: var(--panel-contrast);
-		font-size: 0.95rem;
-		font-weight: 700;
-		line-height: 1;
-		padding: 0 0.15rem;
-		cursor: pointer;
-	}
-
-	.map-controls button.active-toggle {
-		border-color: #3b82f6;
-		background: color-mix(in oklab, var(--panel-bg) 82%, #3b82f6 18%);
-	}
-
 	.racks-manager {
 		position: absolute;
-		left: 0.75rem;
-		bottom: 0.75rem;
+		right: 0.75rem;
+		top: 0.75rem;
 		z-index: 14;
 		display: flex;
 		flex-direction: column;
-		gap: 0.35rem;
-		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
-		border: 1px solid var(--panel-border);
-		border-radius: 10px;
-		padding: 0.5rem 0.6rem;
-		max-width: min(80vw, 320px);
-		max-height: 50%;
-		overflow-y: auto;
+		gap: 0.45rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-panel);
+		box-shadow: var(--shadow-panel);
+		padding: 0.55rem 0.7rem;
+		max-width: min(88vw, 340px);
 	}
 
-	.racks-manager h3 {
-		margin: 0 0 0.15rem;
-		font-size: 0.8rem;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--muted-text);
+	.racks-manager-toggle {
+		margin-bottom: 0;
 	}
 
 	.racks-manager-row {
@@ -3706,50 +3982,137 @@
 		cursor: pointer;
 	}
 
-	.vlan-legend {
+	.graph-viewport {
+		position: absolute;
+		inset: 0;
+	}
+
+	.map-legend {
 		position: absolute;
 		left: 0.75rem;
 		bottom: 0.75rem;
 		z-index: 14;
 		display: flex;
 		flex-direction: column;
-		gap: 0.3rem;
-		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
-		border: 1px solid var(--panel-border);
-		border-radius: 10px;
-		padding: 0.45rem 0.55rem;
-		max-width: min(70vw, 300px);
+		width: 260px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-panel);
+		box-shadow: var(--shadow-panel);
+		padding: 8px;
 	}
 
-	.vlan-legend-item {
-		display: inline-flex;
+	.legend-title {
+		font-size: 10.5px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--text-2);
+		padding: 5px 9px 3px;
+	}
+
+	.legend-row {
+		display: flex;
 		align-items: center;
-		gap: 0.4rem;
-		border: 1px solid transparent;
+		gap: 8px;
+		padding: 6px 9px;
+		border: none;
+		border-radius: var(--radius-control);
 		background: transparent;
-		color: var(--panel-contrast);
-		font-size: 0.74rem;
-		font-weight: 600;
-		border-radius: 7px;
-		padding: 0.2rem 0.35rem;
+		color: var(--text);
+		font-family: inherit;
 		cursor: pointer;
 		text-align: left;
 	}
 
-	.vlan-legend-item:hover {
-		border-color: var(--panel-border);
+	.legend-row:hover {
+		background: var(--surface-2);
 	}
 
-	.vlan-legend-item.active {
-		border-color: #3b82f6;
-		background: color-mix(in oklab, var(--panel-bg) 82%, #3b82f6 18%);
+	.legend-row.selected {
+		background: var(--surface-2);
+	}
+
+	.legend-row.filtered-out {
+		opacity: 0.45;
+	}
+
+	.legend-row.filtered-out .legend-name {
+		text-decoration: line-through;
+	}
+
+	.legend-name {
+		font-size: 12.5px;
+		font-weight: 600;
+		flex: 1;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.legend-cidr {
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		color: var(--text-2);
+	}
+
+	.legend-count {
+		font-size: 10.5px;
+		font-weight: 600;
+		color: var(--text-2);
+		background: var(--surface);
+		border: 1px solid var(--border);
+		padding: 0 5px;
+		border-radius: 999px;
+	}
+
+	.legend-rule {
+		height: 1px;
+		background: var(--surface-2);
+		margin: 5px 4px;
 	}
 
 	.vlan-swatch {
-		width: 0.75rem;
-		height: 0.75rem;
+		width: 11px;
+		height: 11px;
 		border-radius: 3px;
 		flex-shrink: 0;
+	}
+
+	.shape-key {
+		display: flex;
+		gap: 12px;
+		padding: 5px 9px 4px;
+		font-size: 10.5px;
+		color: var(--text-2);
+		align-items: center;
+	}
+
+	.shape-item {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.shape-swatch {
+		width: 14px;
+		height: 9px;
+		border-radius: 2px;
+	}
+
+	.shape-swatch.host {
+		border: 1.5px solid var(--graph-edge);
+		background: var(--surface);
+	}
+
+	.shape-swatch.infra {
+		background: var(--graph-infra-fill);
+	}
+
+	.shape-swatch.device {
+		border: 1.5px dashed var(--graph-dumb-border);
+		border-radius: 999px;
+		background: var(--surface);
 	}
 
 	.ipam-panel {
@@ -3757,15 +4120,15 @@
 		right: 0.75rem;
 		bottom: 0.75rem;
 		z-index: 15;
-		width: min(88vw, 360px);
+		width: min(88vw, 340px);
 		max-height: min(72%, 620px);
 		overflow-y: auto;
-		background: color-mix(in oklab, var(--panel-bg) 96%, transparent 4%);
-		border: 1px solid var(--panel-border);
-		border-radius: 10px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-panel);
 		padding: 0.7rem 0.8rem;
-		color: var(--panel-contrast);
-		box-shadow: 0 8px 24px rgba(15, 23, 42, 0.24);
+		color: var(--text);
+		box-shadow: var(--shadow-panel);
 	}
 
 	.ipam-panel-head {
@@ -3821,11 +4184,17 @@
 		font-weight: 600;
 	}
 
+	.ipam-cidr {
+		font-family: var(--font-mono);
+		font-size: 0.74rem;
+		color: var(--text-2);
+	}
+
 	.ipam-badge {
 		font-size: 0.66rem;
 		font-weight: 700;
-		border: 1px solid #3b82f6;
-		color: #3b82f6;
+		border: 1px solid var(--accent);
+		color: var(--accent);
 		border-radius: 999px;
 		padding: 0.05rem 0.4rem;
 	}
@@ -3836,28 +4205,53 @@
 	}
 
 	.ipam-bar {
-		height: 0.4rem;
+		height: 8px;
 		border-radius: 999px;
-		background: color-mix(in oklab, var(--panel-bg) 70%, var(--panel-border) 30%);
-		margin: 0.25rem 0;
+		background: var(--surface-2);
+		margin: 0.35rem 0;
 		overflow: hidden;
 	}
 
 	.ipam-bar-fill {
 		height: 100%;
 		border-radius: 999px;
-		background: #3b82f6;
+		background: var(--accent);
 		min-width: 2px;
 	}
 
-	.ipam-subnet-meta {
-		font-size: 0.74rem;
-		color: var(--muted-text);
+	.ipam-bar-fill.hot {
+		background: var(--danger);
 	}
 
-	.ipam-subnet-meta code,
+	.ipam-subnet-meta {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		font-size: 0.74rem;
+		color: var(--text-2);
+	}
+
+	.ipam-copy-ip {
+		font-family: var(--font-mono);
+		font-size: 0.72rem;
+		color: var(--text);
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 0.1rem 0.5rem;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.ipam-copy-ip:hover {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+
 	.ipam-conflicts code,
 	.ipam-unparsed code {
+		font-family: var(--font-mono);
 		font-size: 0.74rem;
 	}
 
@@ -3869,7 +4263,7 @@
 	}
 
 	.ipam-conflicts li {
-		color: #dc2626;
+		color: var(--danger);
 		margin-bottom: 0.2rem;
 	}
 
@@ -3910,15 +4304,48 @@
 		min-width: 0;
 	}
 
-	.ipam-subnet-editor button {
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		border-radius: 6px;
-		padding: 0.25rem 0.4rem;
-		font-size: 0.72rem;
+	.ipam-disclosure {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		border: none;
+		background: transparent;
+		color: var(--text-2);
+		font-size: 0.78rem;
 		font-weight: 600;
+		font-family: inherit;
 		cursor: pointer;
+		padding: 0.2rem 0;
+		margin-bottom: 0.35rem;
+	}
+
+	.ipam-disclosure:hover {
+		color: var(--text);
+	}
+
+	.disclosure-chevron {
+		display: inline-block;
+		transition: transform 120ms ease;
+	}
+
+	.disclosure-chevron.open {
+		transform: rotate(90deg);
+	}
+
+	.ipam-manage {
+		border-top: 1px solid var(--surface-2);
+		padding-top: 0.5rem;
+	}
+
+	.subnet-remove {
+		height: auto;
+		padding: 0.25rem 0.5rem;
+		font-size: 0.72rem;
+	}
+
+	.subnet-remove.confirming {
+		background: color-mix(in srgb, var(--danger) 12%, transparent);
+		font-weight: 700;
 	}
 
 	.ip-conflict-hint {
@@ -3926,7 +4353,7 @@
 		margin-top: 0.2rem;
 		font-size: 0.74rem;
 		font-weight: 600;
-		color: #dc2626;
+		color: var(--danger);
 	}
 
 	.ip-suggest-row {
@@ -3952,157 +4379,27 @@
 		white-space: nowrap;
 	}
 
-	.select-control {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.45rem;
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		padding: 0.32rem 0.5rem;
-		border-radius: 7px;
-		font-size: 0.78rem;
-		font-weight: 600;
-	}
-
-	button.danger {
-		border-color: #ef4444;
-		color: #dc2626;
-	}
-
-	.map-controls button:disabled {
-		opacity: 0.45;
-		cursor: not-allowed;
-	}
-
-	.toggle-control {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.45rem;
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		padding: 0.32rem 0.5rem;
-		border-radius: 7px;
-		font-size: 0.78rem;
-		font-weight: 600;
-		cursor: pointer;
-		position: relative;
-	}
-
-	.toggle-control.disabled {
-		opacity: 0.45;
-		cursor: not-allowed;
-	}
-
-	.toggle-input {
-		position: absolute;
-		opacity: 0;
-		pointer-events: none;
-		width: 1px;
-		height: 1px;
-	}
-
-	.toggle-track {
-		width: 2rem;
-		height: 1.1rem;
-		border-radius: 999px;
-		border: 1px solid var(--panel-border);
-		background: color-mix(in oklab, var(--panel-bg) 80%, black 20%);
-		display: inline-flex;
-		align-items: center;
-		padding: 0.08rem;
-		transition: background-color 0.15s ease, border-color 0.15s ease;
-	}
-
-	.toggle-thumb {
-		width: 0.86rem;
-		height: 0.86rem;
-		border-radius: 999px;
-		background: #ffffff;
-		box-shadow: 0 1px 3px rgba(15, 23, 42, 0.22);
-		transform: translateX(0);
-		transition: transform 0.15s ease;
-	}
-
-	.toggle-input:checked + .toggle-track {
-		background: #2563eb;
-		border-color: #2563eb;
-	}
-
-	.toggle-input:checked + .toggle-track .toggle-thumb {
-		transform: translateX(0.9rem);
-	}
-
-	.toggle-input:focus-visible + .toggle-track {
-		outline: 2px solid #60a5fa;
-		outline-offset: 2px;
-	}
-
-	.data-source {
+	.stage-toasts {
 		position: absolute;
 		top: 0.75rem;
-		left: 0.75rem;
-		z-index: 14;
-		border: 1px solid var(--panel-border);
-		border-radius: 8px;
-		background: color-mix(in oklab, var(--panel-bg) 93%, transparent 7%);
-		color: var(--muted-text);
-		padding: 0.35rem 0.5rem;
-		font-size: 0.72rem;
-		font-weight: 600;
-		max-width: min(55vw, 500px);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+		left: 50%;
+		transform: translateX(-50%);
+		z-index: 30;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		max-width: min(90vw, 480px);
 	}
 
-	.status-chip {
-		position: absolute;
-		left: 0.75rem;
-		top: 2.75rem;
-		z-index: 14;
-		border: 1px solid var(--panel-border);
-		border-radius: 8px;
-		padding: 0.35rem 0.5rem;
-		font-size: 0.73rem;
-		font-weight: 600;
-		background: var(--chip-bg);
-		color: var(--chip-text);
-	}
-
-	.status-chip.loading {
-		top: 4.95rem;
-	}
-
-	.status-chip.secondary {
-		top: 6.95rem;
-		max-width: min(65vw, 560px);
-	}
-
-	.status-chip.tertiary {
-		top: 8.95rem;
-		max-width: min(65vw, 560px);
-	}
-
-	.status-chip.error {
-		border-color: #fca5a5;
-		color: #b91c1c;
-		background: #fee2e2;
-	}
-
-	.readonly-banner {
-		position: absolute;
-		left: 0.75rem;
-		top: 4.95rem;
-		z-index: 14;
-		border: 1px solid #f59e0b;
-		border-radius: 8px;
-		padding: 0.35rem 0.5rem;
-		font-size: 0.73rem;
-		font-weight: 600;
-		background: #ffedd5;
-		color: #9a3412;
+	.stage-toast {
+		background: var(--surface);
+		border: 1px solid var(--danger);
+		color: var(--danger);
+		border-radius: var(--radius-panel);
+		box-shadow: var(--shadow-panel);
+		padding: 0.45rem 0.7rem;
+		font-size: 12px;
+		font-weight: 500;
 	}
 
 	.tooltip {
@@ -4123,12 +4420,13 @@
 		border-radius: 8px;
 		background: var(--panel-bg);
 		padding: 0.65rem 0.8rem;
+		margin: 0.75rem;
 		color: var(--panel-contrast);
 		font-size: 0.92rem;
 	}
 
 	.validation-panel {
-		border-color: #f59e0b;
+		border-color: var(--status-warn);
 	}
 
 	.warnings-panel summary,
@@ -4145,222 +4443,516 @@
 		gap: 0.28rem;
 	}
 
-	.edit-section {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-		gap: 0.65rem;
-		margin-bottom: 1rem;
+	/* ---- Editor modal ---- */
+
+	.entity-header {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		flex: 1;
+		min-width: 0;
 	}
 
-	.edit-section h4 {
-		grid-column: 1 / -1;
-		margin: 0;
-		font-size: 1rem;
+	.icon-anchor {
+		position: relative;
+		flex-shrink: 0;
 	}
 
-	.edit-section label {
-		display: grid;
-		gap: 0.25rem;
-		font-size: 0.8rem;
+	.icon-btn {
+		width: 44px;
+		height: 44px;
+		border-radius: var(--radius-panel);
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 20px;
+		color: var(--text-2);
+		cursor: pointer;
+	}
+
+	.icon-btn:hover {
+		border-color: var(--accent);
+	}
+
+	.icon-btn img {
+		width: 30px;
+		height: 30px;
+		object-fit: contain;
+	}
+
+	.entity-id {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		min-width: 0;
+	}
+
+	.entity-name-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
+	}
+
+	.entity-name {
+		font-size: 18px;
+		font-weight: 700;
+		line-height: 1;
+		color: var(--text);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.chip-role {
+		font-size: 11px;
 		font-weight: 600;
-		color: var(--muted-text);
+		color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+		padding: 2px 8px;
+		border-radius: 999px;
+		white-space: nowrap;
+		max-width: 200px;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
-	.edit-section input,
-	.edit-section textarea,
-	.edit-section select {
-		padding: 0.45rem 0.5rem;
-		border-radius: 8px;
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		font-size: 0.86rem;
+	.entity-meta {
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		color: var(--text-2);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
-	.edit-section textarea {
-		min-height: 64px;
+	.modal-sections {
+		display: flex;
+		flex-direction: column;
+		gap: 22px;
+	}
+
+	.modal-section {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.section-head {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.section-title {
+		font-size: 15px;
+		font-weight: 650;
+		color: var(--text);
+		white-space: nowrap;
+	}
+
+	.count-chip {
+		font-size: 11.5px;
+		font-weight: 600;
+		color: var(--text-2);
+		background: var(--surface-2);
+		padding: 1px 7px;
+		border-radius: 999px;
+	}
+
+	.rule {
+		flex: 1;
+		height: 1px;
+		background: color-mix(in srgb, var(--border) 60%, var(--surface));
+	}
+
+	.field-grid {
+		display: grid;
+		gap: 12px;
+	}
+
+	.field-grid.cols-1 {
+		grid-template-columns: 1fr;
+	}
+
+	.field-grid.cols-2 {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.field-grid.cols-3 {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.field-grid.cols-4 {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+
+	.field-grid.cols-1-2 {
+		grid-template-columns: 1fr 2fr;
+	}
+
+	@media (max-width: 640px) {
+		.field-grid.cols-2,
+		.field-grid.cols-3,
+		.field-grid.cols-4,
+		.field-grid.cols-1-2 {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	.field-grid label {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-2);
+		min-width: 0;
+	}
+
+	.field-grid input,
+	.field-grid textarea,
+	.field-grid select {
+		height: var(--control-h);
+		padding: 0 10px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-control);
+		background: var(--surface);
+		color: var(--text);
+		font-size: 13.5px;
+		font-family: inherit;
+		box-sizing: border-box;
+		width: 100%;
+	}
+
+	.field-grid input.mono {
+		font-family: var(--font-mono);
+		font-size: 12px;
+	}
+
+	.field-grid textarea {
+		min-height: var(--control-h);
+		padding-top: 6px;
 		resize: vertical;
 	}
 
-	.field-row {
-		grid-column: 1 / -1;
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-		gap: 0.6rem;
+	.field-grid input:focus,
+	.field-grid textarea:focus,
+	.field-grid select:focus {
+		outline: none;
+		border-color: var(--accent);
 	}
 
-	.item-card {
-		grid-column: 1 / -1;
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-		gap: 0.45rem;
-		padding: 0.65rem;
-		border: 1px solid var(--panel-border);
-		border-radius: 10px;
-		background: color-mix(in oklab, var(--panel-bg) 92%, black 8%);
+	.field-grid input:disabled {
+		opacity: 0.5;
 	}
 
-	.item-actions {
-		display: flex;
-		gap: 0.4rem;
-		align-items: end;
-	}
-
-	.inline-actions {
-		grid-column: 1 / -1;
-		display: flex;
-		justify-content: flex-end;
-	}
-
-	.modal-footer {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.5rem;
-	}
-
-	.icon-search {
-		margin-bottom: 0.7rem;
-		display: grid;
-		gap: 0.6rem;
-	}
-
-	.icon-search-collapsed {
-		margin-bottom: 0.7rem;
-		display: flex;
+	.mini-toggle {
+		display: inline-flex;
 		align-items: center;
-		gap: 0.6rem;
-	}
-
-	.icon-search-collapsed button,
-	.icon-collapse {
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		padding: 0.35rem 0.55rem;
-		border-radius: 7px;
-		font-size: 0.8rem;
-		font-weight: 600;
+		gap: 7px;
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--text-2);
 		cursor: pointer;
 		white-space: nowrap;
 	}
 
-	.icon-collapse {
-		margin-left: auto;
+	.toggle-input {
+		position: absolute;
+		opacity: 0;
+		pointer-events: none;
 	}
 
-	.icon-search label {
-		display: grid;
-		gap: 0.25rem;
-		font-size: 0.8rem;
-		font-weight: 600;
-		color: var(--muted-text);
-	}
-
-	.icon-search input {
-		padding: 0.45rem 0.5rem;
-		border-radius: 8px;
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		font-size: 0.86rem;
-	}
-
-	.icon-preview-card {
+	.toggle-track {
 		display: inline-flex;
-		align-items: center;
-		gap: 0.6rem;
-		padding: 0.5rem;
-		border: 1px solid var(--panel-border);
-		border-radius: 8px;
-		background: color-mix(in oklab, var(--panel-bg) 92%, black 8%);
+		width: 30px;
+		height: 18px;
+		background: color-mix(in oklab, var(--text-2) 40%, var(--surface-2));
+		border-radius: 999px;
+		position: relative;
+		transition: background 120ms ease;
+		flex-shrink: 0;
 	}
 
-	.icon-preview-card img {
-		width: 28px;
+	.toggle-thumb {
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: 14px;
+		height: 14px;
+		background: var(--surface);
+		border-radius: 50%;
+		transition: transform 120ms ease;
+	}
+
+	.toggle-input:checked + .toggle-track {
+		background: var(--accent);
+	}
+
+	.toggle-input:checked + .toggle-track .toggle-thumb {
+		transform: translateX(12px);
+	}
+
+	.toggle-input:focus-visible + .toggle-track {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
+	}
+
+	.btn-small {
 		height: 28px;
-		object-fit: contain;
+		padding: 0 11px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-control);
+		color: var(--text);
+		font-size: 12.5px;
+		font-weight: 550;
+		font-family: inherit;
+		cursor: pointer;
+		white-space: nowrap;
 	}
 
-	.icon-preview-card code {
-		font-size: 0.74rem;
-		color: var(--muted-text);
-		word-break: break-all;
+	.btn-small:hover {
+		border-color: var(--accent);
 	}
 
-	.icon-results-meta {
-		margin: 0;
-		font-size: 0.74rem;
-		font-weight: 600;
-		color: var(--muted-text);
-	}
-
-	.icon-results-empty {
-		margin: 0;
-		font-size: 0.74rem;
-		font-weight: 600;
-		color: var(--muted-text);
-	}
-
-	.icon-results-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-		gap: 0.45rem;
-		max-height: 280px;
-		overflow: auto;
-		padding-right: 0.25rem;
-	}
-
-	.icon-result-option {
-		display: grid;
-		grid-template-columns: 24px 1fr;
-		grid-template-areas:
-			'icon label'
-			'icon key';
-		align-items: center;
-		gap: 0.2rem 0.5rem;
-		border: 1px solid var(--panel-border);
-		background: var(--panel-bg);
-		color: var(--panel-contrast);
-		padding: 0.4rem 0.45rem;
+	.data-table {
+		border: 1px solid color-mix(in srgb, var(--border) 70%, var(--surface));
 		border-radius: 8px;
+		overflow: hidden;
+	}
+
+	.vm-grid {
+		display: grid;
+		grid-template-columns: 28px 1.2fr 1.6fr 1fr 1.3fr 30px;
+		gap: 10px;
+		align-items: center;
+	}
+
+	.port-grid {
+		display: grid;
+		grid-template-columns: 0.8fr 0.7fr 1.9fr 1.1fr 30px;
+		gap: 10px;
+		align-items: center;
+	}
+
+	.table-head {
+		padding: 6px 12px;
+		background: var(--surface-2);
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, var(--surface));
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-2);
+	}
+
+	.table-row {
+		padding: 8px 12px;
+		background: var(--surface);
+		font-size: 13px;
+		color: var(--text);
 		cursor: pointer;
 		text-align: left;
+		width: 100%;
+		border: none;
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, var(--surface));
+		font-family: inherit;
 	}
 
-	.icon-result-option:hover {
-		background: color-mix(in oklab, var(--panel-bg) 84%, #3b82f6 16%);
+	.table-row:last-child {
+		border-bottom: none;
 	}
 
-	.icon-result-option img {
-		grid-area: icon;
-		width: 20px;
-		height: 20px;
+	.table-row:hover,
+	.table-row.expanded {
+		background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+	}
+
+	.table-row:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: -2px;
+	}
+
+	.table-row .mono {
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+	}
+
+	.row-icon {
+		width: 22px;
+		height: 22px;
+		border-radius: 5px;
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 11px;
+		color: var(--text-2);
+		overflow: hidden;
+	}
+
+	.row-icon img {
+		width: 16px;
+		height: 16px;
 		object-fit: contain;
 	}
 
-	.icon-result-option span {
-		grid-area: label;
-		font-size: 0.75rem;
-		font-weight: 700;
-		line-height: 1.2;
+	.row-name {
+		font-weight: 550;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
-	.icon-result-option code {
-		grid-area: key;
-		font-size: 0.66rem;
-		color: var(--muted-text);
-		line-height: 1.2;
-		word-break: break-all;
+	.row-muted {
+		color: var(--text-2);
+		font-size: 12.5px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.row-connection {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12.5px;
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.row-cable {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 12px;
+		color: var(--text);
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+	}
+
+	.cable-swatch {
+		width: 10px;
+		height: 10px;
+		border-radius: 3px;
+		border: 1px solid var(--border);
+		flex-shrink: 0;
+	}
+
+	.row-trash {
+		width: 26px;
+		height: 26px;
+		border: none;
+		background: transparent;
+		color: var(--text-2);
+		font-size: 13px;
+		cursor: pointer;
+		border-radius: 5px;
+		line-height: 1;
+	}
+
+	.row-trash:hover {
+		color: var(--danger);
+		background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+	}
+
+	.row-expand {
+		padding: 12px;
+		background: color-mix(in srgb, var(--surface-2) 40%, var(--surface));
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, var(--surface));
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.row-expand:last-child {
+		border-bottom: none;
+	}
+
+	.row-expand-actions {
+		display: flex;
+		justify-content: flex-end;
+	}
+
+	.row-icon-picker {
+		align-self: flex-start;
+	}
+
+	.footer-spacer {
+		flex: 1;
+	}
+
+	.footer-hint {
+		font-size: 12px;
+		color: var(--text-2);
+	}
+
+	.btn-primary-modal {
+		height: var(--control-h);
+		padding: 0 16px;
+		background: var(--accent);
+		color: var(--surface);
+		border: none;
+		border-radius: var(--radius-control);
+		font-size: 13.5px;
+		font-weight: 600;
+		font-family: inherit;
+		cursor: pointer;
+	}
+
+	.btn-primary-modal:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.btn-danger-quiet {
+		height: var(--control-h);
+		padding: 0 12px;
+		background: transparent;
+		color: var(--danger);
+		border: none;
+		border-radius: var(--radius-control);
+		font-size: 13px;
+		font-weight: 500;
+		font-family: inherit;
+		cursor: pointer;
+	}
+
+	.btn-danger-quiet:hover {
+		background: color-mix(in srgb, var(--danger) 10%, transparent);
+	}
+
+	.btn-danger-fill {
+		height: var(--control-h);
+		padding: 0 16px;
+		background: var(--danger);
+		color: #fff;
+		border: none;
+		border-radius: var(--radius-control);
+		font-size: 13.5px;
+		font-weight: 600;
+		font-family: inherit;
+		cursor: pointer;
+	}
+
+	.confirm-copy {
+		margin: 0;
+		font-size: 13.5px;
+		line-height: 1.55;
+		color: var(--text);
 	}
 
 	@media (max-width: 900px) {
-		.diagram-shell {
-			height: auto;
-			grid-template-rows: minmax(560px, 1fr) auto;
-		}
-
-		.data-source {
-			max-width: min(72vw, 420px);
+		.diagram-stage {
+			min-height: 560px;
 		}
 	}
 </style>

@@ -61,7 +61,11 @@ export function cloneNetworkData(data: NetworkData): NetworkData {
 	return cloned;
 }
 
-function findOwnerByKindAndName(data: NetworkData, kind: OwnerKind, name: string): OwnerRef | undefined {
+function findOwnerByKindAndName(
+	data: NetworkData,
+	kind: OwnerKind,
+	name: string
+): OwnerRef | undefined {
 	if (kind === 'machine') {
 		const machine = data.machines.find((item) => equalsIgnoreCase(item.machineName, name));
 		if (!machine) {
@@ -113,46 +117,49 @@ function ensureReciprocalConnections(data: NetworkData) {
 				continue;
 			}
 
-				const targetPort = findPort(targetOwner, port.connectedTo.port);
-				if (!targetPort) {
-					delete port.connectedTo;
-					continue;
-				}
+			const targetPort = findPort(targetOwner, port.connectedTo.port);
+			if (!targetPort) {
+				delete port.connectedTo;
+				continue;
+			}
 
-				const expectedReciprocal: Port['connectedTo'] = {
-					device: owner.name,
-					port: port.portName,
-					...(port.connectedTo.cable ? { cable: deepClone(port.connectedTo.cable) } : {})
-				};
-				if (!targetPort.connectedTo) {
-					targetPort.connectedTo = expectedReciprocal;
-					continue;
-				}
+			const expectedReciprocal: Port['connectedTo'] = {
+				device: owner.name,
+				port: port.portName,
+				...(port.connectedTo.cable ? { cable: deepClone(port.connectedTo.cable) } : {})
+			};
+			if (!targetPort.connectedTo) {
+				targetPort.connectedTo = expectedReciprocal;
+				continue;
+			}
 
-				const hasMatchingReciprocal =
-					equalsIgnoreCase(targetPort.connectedTo.device, owner.name) &&
-					equalsIgnoreCase(targetPort.connectedTo.port, port.portName);
-				if (hasMatchingReciprocal) {
-					// keep cable metadata identical on both ends; the lexicographically
-					// smaller owner:port key is the canonical copy so the sync is deterministic
-					const ownKey = `${owner.name}:${port.portName}`.toLowerCase();
-					const targetKey = `${targetOwner.name}:${targetPort.portName}`.toLowerCase();
-					const [from, to] =
-						ownKey <= targetKey
-							? [port.connectedTo, targetPort.connectedTo]
-							: [targetPort.connectedTo, port.connectedTo];
-					if (from.cable) {
-						to.cable = deepClone(from.cable);
-					} else {
-						delete to.cable;
-					}
-					continue;
+			const hasMatchingReciprocal =
+				equalsIgnoreCase(targetPort.connectedTo.device, owner.name) &&
+				equalsIgnoreCase(targetPort.connectedTo.port, port.portName);
+			if (hasMatchingReciprocal) {
+				// keep cable metadata identical on both ends; the lexicographically
+				// smaller owner:port key is the canonical copy so the sync is deterministic
+				const ownKey = `${owner.name}:${port.portName}`.toLowerCase();
+				const targetKey = `${targetOwner.name}:${targetPort.portName}`.toLowerCase();
+				const [from, to] =
+					ownKey <= targetKey
+						? [port.connectedTo, targetPort.connectedTo]
+						: [targetPort.connectedTo, port.connectedTo];
+				if (from.cable) {
+					to.cable = deepClone(from.cable);
+				} else {
+					delete to.cable;
 				}
+				continue;
 			}
 		}
 	}
+}
 
-function clearInboundReferences(data: NetworkData, predicate: (connection: Port['connectedTo']) => boolean) {
+function clearInboundReferences(
+	data: NetworkData,
+	predicate: (connection: Port['connectedTo']) => boolean
+) {
 	for (const owner of allOwners(data)) {
 		for (const port of owner.ports) {
 			if (!port.connectedTo) {
@@ -226,7 +233,9 @@ export function renameOwner(
 	}
 
 	if (kind === 'machine') {
-		const machine = cloned.machines.find((item) => equalsIgnoreCase(item.machineName, previousName));
+		const machine = cloned.machines.find((item) =>
+			equalsIgnoreCase(item.machineName, previousName)
+		);
 		if (machine) {
 			machine.machineName = nextName;
 		}
@@ -292,14 +301,15 @@ export function deleteOwner(data: NetworkData, kind: OwnerKind, ownerName: strin
 	const cloned = cloneNetworkData(data);
 
 	if (kind === 'machine') {
-		cloned.machines = cloned.machines.filter((machine) => !equalsIgnoreCase(machine.machineName, ownerName));
+		cloned.machines = cloned.machines.filter(
+			(machine) => !equalsIgnoreCase(machine.machineName, ownerName)
+		);
 	} else {
 		cloned.devices = cloned.devices.filter((device) => !equalsIgnoreCase(device.name, ownerName));
 	}
 
-	clearInboundReferences(
-		cloned,
-		(connection) => Boolean(connection && equalsIgnoreCase(connection.device, ownerName))
+	clearInboundReferences(cloned, (connection) =>
+		Boolean(connection && equalsIgnoreCase(connection.device, ownerName))
 	);
 	ensureReciprocalConnections(cloned);
 	return cloned;
@@ -331,14 +341,12 @@ export function deletePort(
 		}
 	}
 
-	clearInboundReferences(
-		cloned,
-		(connection) =>
-			Boolean(
-				connection &&
-					equalsIgnoreCase(connection.device, ownerName) &&
-					equalsIgnoreCase(connection.port, portName)
-			)
+	clearInboundReferences(cloned, (connection) =>
+		Boolean(
+			connection &&
+			equalsIgnoreCase(connection.device, ownerName) &&
+			equalsIgnoreCase(connection.port, portName)
+		)
 	);
 	ensureReciprocalConnections(cloned);
 	return cloned;
@@ -441,7 +449,9 @@ export function setPortConnection(
 	const previousConnection = port.connectedTo;
 	if (previousConnection) {
 		const previousOwner = findOwnerByName(cloned, previousConnection.device);
-		const previousPort = previousOwner ? findPort(previousOwner, previousConnection.port) : undefined;
+		const previousPort = previousOwner
+			? findPort(previousOwner, previousConnection.port)
+			: undefined;
 		if (previousPort) {
 			delete previousPort.connectedTo;
 		}

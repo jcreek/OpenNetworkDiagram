@@ -223,6 +223,7 @@ export async function getWritableState() {
 	}
 
 	try {
+		// eslint-disable-next-line no-bitwise -- Node fs access mode flags combine bitwise
 		await access(source, constants.R_OK | constants.W_OK);
 	} catch (error) {
 		return {

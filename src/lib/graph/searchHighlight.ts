@@ -51,3 +51,41 @@ export function computeSearchMatches(
 
 	return matches;
 }
+
+/**
+ * Ordered variant used for Enter/Shift-Enter cycling: node IDs in graph
+ * order, deduped, with VM hits mapped to their host so the camera can land
+ * on something visible while the host's VMs are collapsed.
+ */
+export function computeSearchMatchList(
+	transformed: Pick<GraphTransformResult, 'nodes'>,
+	query: string
+): string[] {
+	const ordered: string[] = [];
+	const seen = new Set<string>();
+	const normalized = query.trim().toLowerCase();
+	if (!normalized) {
+		return ordered;
+	}
+
+	for (const node of transformed.nodes) {
+		const isMatch = collectSearchableText(node).some((text) =>
+			text.toLowerCase().includes(normalized)
+		);
+		if (!isMatch) {
+			continue;
+		}
+		const ids =
+			node.data.kind === 'vm' && node.data.hostMachineId
+				? [node.data.id, node.data.hostMachineId]
+				: [node.data.id];
+		for (const id of ids) {
+			if (!seen.has(id)) {
+				seen.add(id);
+				ordered.push(id);
+			}
+		}
+	}
+
+	return ordered;
+}
