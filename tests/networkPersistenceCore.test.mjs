@@ -89,6 +89,23 @@ test('does not rewrite an existing valid empty network', async () => {
 	});
 });
 
+test('does not overwrite real data written while a missing file is being initialized', async () => {
+	await withPersistenceEnvironment(async ({ persistence, source }) => {
+		const realData = {
+			machines: [{ machineName: 'Router' }],
+			devices: []
+		};
+
+		const bootstrap = persistence.readOrInitializeNetworkFile();
+		const write = persistence.writeNetworkFile(realData, { createBackup: false });
+		const [bootstrapResult] = await Promise.all([bootstrap, write]);
+
+		assert.equal(bootstrapResult.initialized, false);
+		assert.deepEqual(bootstrapResult.data, realData);
+		assert.deepEqual(JSON.parse(await readFile(source, 'utf8')), realData);
+	});
+});
+
 test('does not replace malformed or schema-invalid non-empty JSON', async () => {
 	await withPersistenceEnvironment(async ({ persistence, source }) => {
 		await persistence.writeNetworkFile({ machines: [], devices: [] }, { createBackup: false });

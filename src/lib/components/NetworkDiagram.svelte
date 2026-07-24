@@ -301,6 +301,9 @@
 	let subnetEditorOpen = false;
 	let showRackManager = false;
 
+	$: totalEntities = networkData.machines.length + networkData.devices.length;
+	$: emptyWritableDataset = writable && totalEntities === 0;
+
 	// Writable empty datasets use a session-only dismissal so onboarding
 	// returns after reload until the user adds a real entity. Sample-data
 	// dismissal remains persisted for returning demo users.
@@ -310,7 +313,7 @@
 	let emptyFirstRunDismissedThisSession = false;
 
 	function dismissFirstRun() {
-		if (writable && totalEntities === 0) {
+		if (emptyWritableDataset) {
 			emptyFirstRunDismissedThisSession = true;
 			return;
 		}
@@ -328,7 +331,6 @@
 		}
 	}
 
-	$: totalEntities = networkData.machines.length + networkData.devices.length;
 	$: allExampleNames =
 		totalEntities > 0 &&
 		[
@@ -338,7 +340,7 @@
 	$: showFirstRun =
 		hasLoadedInitialData &&
 		!isLoadingData &&
-		((writable && totalEntities === 0 && !emptyFirstRunDismissedThisSession) ||
+		((emptyWritableDataset && !emptyFirstRunDismissedThisSession) ||
 			(!firstRunDismissed && totalEntities <= 4 && allExampleNames));
 	let copiedIp: string | null = null;
 	let copiedIpTimer: ReturnType<typeof setTimeout> | null = null;
@@ -704,10 +706,12 @@
 	}
 
 	function resolveStaticFallbackNotice(reason: string | null): string {
-		if (!reason) {
+		const normalizedReason = reason?.trim();
+		if (!normalizedReason) {
 			return 'Read-only: API unavailable; using bundled static data.';
 		}
-		return `Read-only: ${reason} Using bundled static data.`;
+		const separator = /[.!?]$/.test(normalizedReason) ? ' ' : '. ';
+		return `Read-only: ${normalizedReason}${separator}Using bundled static data.`;
 	}
 
 	// Nodes are invisible hit targets (interaction, layout, edge anchoring);
@@ -2527,7 +2531,7 @@
 				isSampleData={allExampleNames}
 				{writable}
 				hasMachines={networkData.machines.length > 0}
-				storageReady={writable && totalEntities === 0}
+				storageReady={emptyWritableDataset}
 				on:addmachine={addMachine}
 				on:connectport={openFirstMachineEditor}
 				on:openipam={() => (showIpamPanel = true)}

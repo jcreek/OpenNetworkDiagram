@@ -126,7 +126,7 @@ If you prefer compose:
 services:
   open-network-diagram:
     image: jcreek23/open-network-diagram:latest
-    user: '${OND_UID:-1000}:${OND_GID:-1000}'
+    user: '${OND_UID:?Set OND_UID to your host user ID}:${OND_GID:?Set OND_GID to your host group ID}'
     ports:
       - '8080:3000'
     volumes:
@@ -144,7 +144,7 @@ mkdir -p data
 OND_UID="$(id -u)" OND_GID="$(id -g)" docker compose up -d
 ```
 
-`OND_UID` and `OND_GID` are used only by Compose to select the container process identity; they are not application environment variables. The defaults suit common Linux installations. Docker Desktop users can remove the `user` line if their file-sharing configuration requires the image's built-in user.
+`OND_UID` and `OND_GID` are required Compose interpolation values supplied by the command above; they are not application environment variables. Docker Desktop users can remove the `user` line if their file-sharing configuration requires the image's built-in user.
 
 ### Using a Docker Named Volume
 
