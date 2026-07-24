@@ -243,8 +243,9 @@ OpenNetworkDiagram/
 
 ### CI/CD
 
-- `docker.yml`: validates Docker build on pull requests.
-- `release.yml`: semantic release on `main` and Docker Hub publish for tagged releases.
+- `docker.yml`: validates AMD64 and ARM64 Docker builds on pull requests.
+- `release.yml`: semantic release on `main` and multi-platform Docker Hub publish for tagged releases.
+- Published images support AMD64 and 64-bit ARM (including Raspberry Pi systems); Docker selects the matching variant automatically.
 - Docker Hub image: [`jcreek23/open-network-diagram`](https://hub.docker.com/r/jcreek23/open-network-diagram)
 
 ## Contributing
