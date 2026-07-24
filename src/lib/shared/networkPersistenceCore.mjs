@@ -16,12 +16,19 @@ import path from 'node:path';
  * @typedef {{ machines: unknown[]; devices: unknown[] }} NetworkData
  * @typedef {{ source: string; updatedAt: string }} NetworkFileMetadata
  * @typedef {{ data: NetworkData } & NetworkFileMetadata} NetworkFileReadResult
+ * @typedef {{ status: 'ready'; data: NetworkData; source: string; updatedAt: string } | { status: 'missing' | 'blank'; source: string; updatedAt: string | null }} NetworkFileReadState
+ * @typedef {NetworkFileReadResult & { initialized: boolean }} NetworkFileBootstrapResult
  * @typedef {{ writable: boolean; reason: string | null }} WritableState
+ * @typedef {{ createBackup?: boolean }} WriteNetworkFileOptions
  */
 
 const NETWORK_READ_ONLY = process.env.NETWORK_READ_ONLY === 'true';
 const DATA_FILE_DEFAULT = path.resolve(process.cwd(), 'data/network.json');
 const BACKUP_DIR_DEFAULT = path.resolve(process.cwd(), 'data/.backups');
+const EMPTY_NETWORK_DATA = Object.freeze({
+	machines: Object.freeze([]),
+	devices: Object.freeze([])
+});
 
 /**
  * @returns {string}
@@ -86,17 +93,54 @@ async function readUpdatedAt(dataFilePath) {
 }
 
 /**
- * @returns {Promise<NetworkFileReadResult>}
+ * @returns {Promise<NetworkFileReadState>}
  */
-export async function readNetworkFile() {
+export async function readNetworkFileState() {
 	const source = resolveDataFilePath();
-	const raw = await readFile(source, 'utf8');
+	let raw;
+	try {
+		raw = await readFile(source, 'utf8');
+	} catch (error) {
+		if (formatFileSystemErrorCode(error) === 'ENOENT') {
+			return {
+				status: 'missing',
+				source,
+				updatedAt: null
+			};
+		}
+		throw error;
+	}
+
+	if (raw.trim().length === 0) {
+		return {
+			status: 'blank',
+			source,
+			updatedAt: await readUpdatedAt(source)
+		};
+	}
+
 	const parsed = JSON.parse(raw);
 	const updatedAt = await readUpdatedAt(source);
 	return {
+		status: 'ready',
 		data: parsed,
 		source,
 		updatedAt
+	};
+}
+
+/**
+ * @returns {Promise<NetworkFileReadResult>}
+ */
+export async function readNetworkFile() {
+	const state = await readNetworkFileState();
+	if (state.status !== 'ready') {
+		throw new Error(`Network data file "${state.source}" is ${state.status}.`);
+	}
+	return {
+		data: state.data,
+		source: state.source,
+		updatedAt: state.updatedAt
 	};
 }
 
@@ -149,14 +193,21 @@ export async function trimBackups(backupDirectory, baseName, keep = 5) {
 
 /**
  * @param {NetworkData} data
+ * @param {WriteNetworkFileOptions} [options]
  * @returns {Promise<NetworkFileMetadata>}
  */
-export async function writeNetworkFile(data) {
+export async function writeNetworkFile(data, options) {
+	if (!isWriteEnabled()) {
+		throw new Error('Writes disabled by NETWORK_READ_ONLY=true.');
+	}
+
 	const source = resolveDataFilePath();
 	const backupDirectory = resolveBackupDirectory();
 	const directory = path.dirname(source);
 	await mkdir(directory, { recursive: true });
-	await createBackupIfPresent(source, backupDirectory);
+	if (options?.createBackup ?? true) {
+		await createBackupIfPresent(source, backupDirectory);
+	}
 
 	const temporaryPath = `${source}.tmp-${Date.now()}-${process.pid}`;
 	const jsonPayload = `${JSON.stringify(data, null, '\t')}\n`;
@@ -243,4 +294,40 @@ export async function getWritableState() {
  */
 export async function checkWritableState() {
 	return (await getWritableState()).writable;
+}
+
+/**
+ * Reads configured network data, creating a valid blank dataset only when the
+ * file is missing/blank and the deployment has confirmed writable storage.
+ *
+ * @returns {Promise<NetworkFileBootstrapResult>}
+ */
+export async function readOrInitializeNetworkFile() {
+	const state = await readNetworkFileState();
+	if (state.status === 'ready') {
+		return {
+			data: state.data,
+			source: state.source,
+			updatedAt: state.updatedAt,
+			initialized: false
+		};
+	}
+
+	const writableState = await getWritableState();
+	if (!writableState.writable) {
+		const suffix = writableState.reason ? ` ${writableState.reason}` : '';
+		throw new Error(`Network data file "${state.source}" is ${state.status}.${suffix}`);
+	}
+
+	const data = {
+		machines: [...EMPTY_NETWORK_DATA.machines],
+		devices: [...EMPTY_NETWORK_DATA.devices]
+	};
+	const metadata = await writeNetworkFile(data, { createBackup: false });
+	return {
+		data,
+		source: metadata.source,
+		updatedAt: metadata.updatedAt,
+		initialized: true
+	};
 }

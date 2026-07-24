@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { validateNetworkData } from './src/lib/shared/networkSchemaCore.mjs';
 import {
 	getWritableState,
-	readNetworkFile,
+	readOrInitializeNetworkFile,
 	writeNetworkFile
 } from './src/lib/shared/networkPersistenceCore.mjs';
 
@@ -59,12 +59,17 @@ function resolveReadOnlyErrorMessage(reason) {
 async function serveApi(request, response) {
 	if (request.method === 'GET') {
 		try {
-			const [payload, writableState] = await Promise.all([readNetworkFile(), getWritableState()]);
+			const [payload, writableState] = await Promise.all([
+				readOrInitializeNetworkFile(),
+				getWritableState()
+			]);
 			const validation = validateNetworkData(payload.data);
 			if (!validation.valid) {
 				sendJson(response, 500, {
 					error: 'Stored network data is invalid',
-					details: validation.errors
+					details: validation.errors,
+					writable: false,
+					writableReason: writableState.reason
 				});
 				return;
 			}
@@ -77,8 +82,14 @@ async function serveApi(request, response) {
 				updatedAt: payload.updatedAt
 			});
 		} catch (error) {
+			const writableState = await getWritableState().catch(() => ({
+				writable: false,
+				reason: null
+			}));
 			sendJson(response, 500, {
-				error: error instanceof Error ? error.message : 'Failed to read network data'
+				error: error instanceof Error ? error.message : 'Failed to read network data',
+				writable: false,
+				writableReason: writableState.reason
 			});
 		}
 		return;

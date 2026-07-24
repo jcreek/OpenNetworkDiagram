@@ -3,10 +3,13 @@ import { json } from '@sveltejs/kit';
 import { validateNetworkData } from '$lib/data/networkSchema';
 import {
 	getWritableState,
-	readNetworkFile,
+	readOrInitializeNetworkFile,
 	writeNetworkFile
 } from '$lib/server/networkPersistence';
 import type { RequestHandler } from './$types';
+
+const staticDemoMode = import.meta.env.OND_STATIC_DEMO;
+const staticDemoReason = 'Static demo deployment; changes are not persisted.';
 
 function serializeValidationErrors(errors: Array<{ path: string; message: string }>) {
 	return errors.map((issue) => ({
@@ -22,10 +25,35 @@ function resolveReadOnlyErrorMessage(reason: string | null): string {
 	return `Write API unavailable: ${reason}`;
 }
 
+async function resolveFailedReadPayload(error: unknown) {
+	const writableState = await getWritableState().catch(() => ({
+		writable: false,
+		reason: null
+	}));
+	const message =
+		error instanceof Error && error.message ? error.message : 'Failed to read network data file';
+	return {
+		error: message,
+		writable: false,
+		writableReason: writableState.reason
+	};
+}
+
 export const GET: RequestHandler = async () => {
+	if (staticDemoMode) {
+		return json(
+			{
+				error: staticDemoReason,
+				writable: false,
+				writableReason: staticDemoReason
+			},
+			{ status: 503 }
+		);
+	}
+
 	try {
 		const [{ data, source, updatedAt }, writableState] = await Promise.all([
-			readNetworkFile(),
+			readOrInitializeNetworkFile(),
 			getWritableState()
 		]);
 		const validation = validateNetworkData(data);
@@ -33,7 +61,9 @@ export const GET: RequestHandler = async () => {
 			return json(
 				{
 					error: 'Stored network data is invalid',
-					details: serializeValidationErrors(validation.errors)
+					details: serializeValidationErrors(validation.errors),
+					writable: false,
+					writableReason: writableState.reason
 				},
 				{ status: 500 }
 			);
@@ -47,13 +77,22 @@ export const GET: RequestHandler = async () => {
 			updatedAt
 		});
 	} catch (error) {
-		const message =
-			error instanceof Error && error.message ? error.message : 'Failed to read network data file';
-		return json({ error: message }, { status: 500 });
+		return json(await resolveFailedReadPayload(error), { status: 500 });
 	}
 };
 
 export const PUT: RequestHandler = async ({ request }) => {
+	if (staticDemoMode) {
+		return json(
+			{
+				error: resolveReadOnlyErrorMessage(staticDemoReason),
+				writable: false,
+				writableReason: staticDemoReason
+			},
+			{ status: 403 }
+		);
+	}
+
 	const writableStateBeforeWrite = await getWritableState();
 	if (!writableStateBeforeWrite.writable) {
 		return json(

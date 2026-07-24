@@ -4,6 +4,7 @@
 	export let isSampleData = false;
 	export let writable = false;
 	export let hasMachines = false;
+	export let storageReady = false;
 
 	const dispatch = createEventDispatcher<{
 		addmachine: void;
@@ -15,7 +16,11 @@
 
 <div class="first-run">
 	<h2>Map your network</h2>
-	{#if isSampleData}
+	{#if storageReady}
+		<p class="storage-note">
+			Your network data file is ready. Add your first machine to start mapping.
+		</p>
+	{:else if isSampleData}
 		<p class="sample-note">This is sample data — replace it with your own machines.</p>
 	{/if}
 	<div class="actions">
@@ -80,6 +85,13 @@
 		font-size: 12.5px;
 		font-weight: 500;
 		color: var(--status-warn);
+	}
+
+	.storage-note {
+		margin: 0;
+		font-size: 12.5px;
+		line-height: 1.5;
+		color: var(--text-2);
 	}
 
 	.actions {
