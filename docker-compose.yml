@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: open-network-diagram:local
+    user: '${OND_UID:?Set OND_UID to your host user ID}:${OND_GID:?Set OND_GID to your host group ID}'
     ports:
       - '8080:3000'
     volumes:

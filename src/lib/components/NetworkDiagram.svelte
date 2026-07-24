@@ -57,6 +57,8 @@
 		| null;
 
 	const autosaveDelayMs = 800;
+	const staticDemoMode = import.meta.env.OND_STATIC_DEMO;
+	const staticDemoReason = 'Static demo deployment; changes are not persisted.';
 
 	let container: HTMLDivElement;
 	let diagramStage: HTMLDivElement;
@@ -299,13 +301,22 @@
 	let subnetEditorOpen = false;
 	let showRackManager = false;
 
-	// First-run card: shown for an empty dataset or the untouched example
-	// file, until dismissed (persisted) or the user makes their first edit.
+	$: totalEntities = networkData.machines.length + networkData.devices.length;
+	$: emptyWritableDataset = writable && totalEntities === 0;
+
+	// Writable empty datasets use a session-only dismissal so onboarding
+	// returns after reload until the user adds a real entity. Sample-data
+	// dismissal remains persisted for returning demo users.
 	const firstRunDismissKey = 'ond-firstrun-dismissed';
 	let firstRunDismissed =
 		typeof localStorage !== 'undefined' && localStorage.getItem(firstRunDismissKey) === '1';
+	let emptyFirstRunDismissedThisSession = false;
 
 	function dismissFirstRun() {
+		if (emptyWritableDataset) {
+			emptyFirstRunDismissedThisSession = true;
+			return;
+		}
 		firstRunDismissed = true;
 		try {
 			localStorage.setItem(firstRunDismissKey, '1');
@@ -320,7 +331,6 @@
 		}
 	}
 
-	$: totalEntities = networkData.machines.length + networkData.devices.length;
 	$: allExampleNames =
 		totalEntities > 0 &&
 		[
@@ -329,9 +339,9 @@
 		].every((name) => name.trim().toLowerCase().startsWith('example'));
 	$: showFirstRun =
 		hasLoadedInitialData &&
-		!firstRunDismissed &&
 		!isLoadingData &&
-		(totalEntities === 0 || (totalEntities <= 4 && allExampleNames));
+		((emptyWritableDataset && !emptyFirstRunDismissedThisSession) ||
+			(!firstRunDismissed && totalEntities <= 4 && allExampleNames));
 	let copiedIp: string | null = null;
 	let copiedIpTimer: ReturnType<typeof setTimeout> | null = null;
 	let pendingSubnetRemoval: number | null = null;
@@ -693,6 +703,15 @@
 			return defaultReadOnlyNotice;
 		}
 		return `Read-only: ${reason}`;
+	}
+
+	function resolveStaticFallbackNotice(reason: string | null): string {
+		const normalizedReason = reason?.trim();
+		if (!normalizedReason) {
+			return 'Read-only: API unavailable; using bundled static data.';
+		}
+		const separator = /[.!?]$/.test(normalizedReason) ? ' ' : '. ';
+		return `Read-only: ${normalizedReason}${separator}Using bundled static data.`;
 	}
 
 	// Nodes are invisible hit targets (interaction, layout, edge anchoring);
@@ -1257,6 +1276,7 @@
 			return;
 		}
 		firstRunDismissed = true;
+		emptyFirstRunDismissedThisSession = true;
 		saveError = null;
 		saveState = 'unsaved';
 		if (!writable) {
@@ -1898,46 +1918,56 @@
 		isLoadingData = true;
 		loadError = null;
 		saveError = null;
+		let apiFallbackReason: string | null = staticDemoMode ? staticDemoReason : null;
 
-		try {
-			const response = await fetch('/api/network-data', {
-				headers: { Accept: 'application/json' }
-			});
-			if (!response.ok) {
-				throw new Error(`API responded with ${response.status}`);
-			}
-			const body = (await response.json()) as {
-				data: NetworkData;
-				writable: boolean;
-				writableReason?: string | null;
-				source: string;
-				updatedAt: string;
-			};
-			const validation = validateNetworkData(body.data);
-			if (!validation.valid || !validation.data) {
-				throw new Error('API returned invalid network data');
-			}
+		if (!staticDemoMode) {
+			try {
+				const response = await fetch('/api/network-data', {
+					headers: { Accept: 'application/json' }
+				});
+				if (!response.ok) {
+					const body = (await response.json().catch(() => ({}))) as {
+						error?: string;
+						writableReason?: string | null;
+					};
+					apiFallbackReason =
+						body.writableReason ?? body.error ?? `API responded with ${response.status}`;
+					throw new Error(apiFallbackReason);
+				}
+				const body = (await response.json()) as {
+					data: NetworkData;
+					writable: boolean;
+					writableReason?: string | null;
+					source: string;
+					updatedAt: string;
+				};
+				const validation = validateNetworkData(body.data);
+				if (!validation.valid || !validation.data) {
+					throw new Error('API returned invalid network data');
+				}
 
-			networkData = cloneNetworkData(validation.data);
-			ensureSelectedTargetValid();
-			writable = body.writable;
-			readOnlyNotice = body.writable
-				? defaultReadOnlyNotice
-				: resolveReadOnlyNotice(body.writableReason);
-			dataSourceLabel = body.source;
-			lastSavedSnapshot = JSON.stringify(networkData);
-			saveState = 'saved';
-			connectionDraftByKey = {};
-			revalidateDraft();
-			refreshGraph();
-			hasLoadedInitialData = true;
-			isLoadingData = false;
-			return;
-		} catch (apiError) {
-			console.warn(
-				'[OpenNetworkDiagram] API load unavailable, falling back to static JSON',
-				apiError
-			);
+				networkData = cloneNetworkData(validation.data);
+				ensureSelectedTargetValid();
+				writable = body.writable;
+				readOnlyNotice = body.writable
+					? defaultReadOnlyNotice
+					: resolveReadOnlyNotice(body.writableReason);
+				dataSourceLabel = body.source;
+				lastSavedSnapshot = JSON.stringify(networkData);
+				saveState = 'saved';
+				connectionDraftByKey = {};
+				revalidateDraft();
+				refreshGraph();
+				hasLoadedInitialData = true;
+				isLoadingData = false;
+				return;
+			} catch (apiError) {
+				apiFallbackReason ??= resolveErrorMessage(apiError);
+				console.warn(
+					'[OpenNetworkDiagram] API load unavailable, falling back to static JSON',
+					apiError
+				);
+			}
 		}
 
 		try {
@@ -1945,7 +1975,7 @@
 			networkData = cloneNetworkData(fallbackData);
 			ensureSelectedTargetValid();
 			writable = false;
-			readOnlyNotice = 'Read-only: API unavailable; using bundled static data.';
+			readOnlyNotice = resolveStaticFallbackNotice(apiFallbackReason);
 			dataSourceLabel = jsonPath;
 			lastSavedSnapshot = JSON.stringify(networkData);
 			saveState = 'saved';
@@ -2501,6 +2531,7 @@
 				isSampleData={allExampleNames}
 				{writable}
 				hasMachines={networkData.machines.length > 0}
+				storageReady={emptyWritableDataset}
 				on:addmachine={addMachine}
 				on:connectport={openFirstMachineEditor}
 				on:openipam={() => (showIpamPanel = true)}

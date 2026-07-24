@@ -16,12 +16,25 @@ import path from 'node:path';
  * @typedef {{ machines: unknown[]; devices: unknown[] }} NetworkData
  * @typedef {{ source: string; updatedAt: string }} NetworkFileMetadata
  * @typedef {{ data: NetworkData } & NetworkFileMetadata} NetworkFileReadResult
+ * @typedef {{ status: 'ready'; data: NetworkData; source: string; updatedAt: string } | { status: 'missing' | 'blank'; source: string; updatedAt: string | null }} NetworkFileReadState
+ * @typedef {NetworkFileReadResult & { initialized: boolean }} NetworkFileBootstrapResult
  * @typedef {{ writable: boolean; reason: string | null }} WritableState
+ * @typedef {{ createBackup?: boolean; beforeCommit?: () => Promise<void> }} WriteNetworkFileOptions
  */
 
 const NETWORK_READ_ONLY = process.env.NETWORK_READ_ONLY === 'true';
 const DATA_FILE_DEFAULT = path.resolve(process.cwd(), 'data/network.json');
 const BACKUP_DIR_DEFAULT = path.resolve(process.cwd(), 'data/.backups');
+const EMPTY_NETWORK_DATA = Object.freeze({
+	machines: Object.freeze([]),
+	devices: Object.freeze([])
+});
+/** @type {Map<string, Promise<unknown>>} */
+const fileWriteOperations = new Map();
+/** @type {Map<string, Promise<NetworkFileBootstrapResult>>} */
+const initializationFlights = new Map();
+
+class InitializationSupersededError extends Error {}
 
 /**
  * @returns {string}
@@ -86,17 +99,54 @@ async function readUpdatedAt(dataFilePath) {
 }
 
 /**
- * @returns {Promise<NetworkFileReadResult>}
+ * @returns {Promise<NetworkFileReadState>}
  */
-export async function readNetworkFile() {
+export async function readNetworkFileState() {
 	const source = resolveDataFilePath();
-	const raw = await readFile(source, 'utf8');
+	let raw;
+	try {
+		raw = await readFile(source, 'utf8');
+	} catch (error) {
+		if (formatFileSystemErrorCode(error) === 'ENOENT') {
+			return {
+				status: 'missing',
+				source,
+				updatedAt: null
+			};
+		}
+		throw error;
+	}
+
+	if (raw.trim().length === 0) {
+		return {
+			status: 'blank',
+			source,
+			updatedAt: await readUpdatedAt(source)
+		};
+	}
+
 	const parsed = JSON.parse(raw);
 	const updatedAt = await readUpdatedAt(source);
 	return {
+		status: 'ready',
 		data: parsed,
 		source,
 		updatedAt
+	};
+}
+
+/**
+ * @returns {Promise<NetworkFileReadResult>}
+ */
+export async function readNetworkFile() {
+	const state = await readNetworkFileState();
+	if (state.status !== 'ready') {
+		throw new Error(`Network data file "${state.source}" is ${state.status}.`);
+	}
+	return {
+		data: state.data,
+		source: state.source,
+		updatedAt: state.updatedAt
 	};
 }
 
@@ -149,14 +199,18 @@ export async function trimBackups(backupDirectory, baseName, keep = 5) {
 
 /**
  * @param {NetworkData} data
+ * @param {string} source
+ * @param {WriteNetworkFileOptions} [options]
  * @returns {Promise<NetworkFileMetadata>}
  */
-export async function writeNetworkFile(data) {
-	const source = resolveDataFilePath();
+async function writeNetworkFileUnlocked(data, source, options) {
+	if (!isWriteEnabled()) {
+		throw new Error('Writes disabled by NETWORK_READ_ONLY=true.');
+	}
+
 	const backupDirectory = resolveBackupDirectory();
 	const directory = path.dirname(source);
 	await mkdir(directory, { recursive: true });
-	await createBackupIfPresent(source, backupDirectory);
 
 	const temporaryPath = `${source}.tmp-${Date.now()}-${process.pid}`;
 	const jsonPayload = `${JSON.stringify(data, null, '\t')}\n`;
@@ -168,10 +222,14 @@ export async function writeNetworkFile(data) {
 		await fileHandle.close();
 	}
 	try {
+		await options?.beforeCommit?.();
+		if (options?.createBackup ?? true) {
+			await createBackupIfPresent(source, backupDirectory);
+		}
 		await rename(temporaryPath, source);
-	} catch (renameError) {
+	} catch (error) {
 		await unlink(temporaryPath).catch(() => undefined);
-		throw renameError;
+		throw error;
 	}
 
 	await trimBackups(backupDirectory, path.basename(source), 5);
@@ -181,6 +239,36 @@ export async function writeNetworkFile(data) {
 		source,
 		updatedAt
 	};
+}
+
+/**
+ * @template T
+ * @param {string} source
+ * @param {() => Promise<T>} operation
+ * @returns {Promise<T>}
+ */
+async function withFileWriteLock(source, operation) {
+	const previousOperation = fileWriteOperations.get(source) ?? Promise.resolve();
+	const currentOperation = previousOperation.catch(() => undefined).then(operation);
+	fileWriteOperations.set(source, currentOperation);
+
+	try {
+		return await currentOperation;
+	} finally {
+		if (fileWriteOperations.get(source) === currentOperation) {
+			fileWriteOperations.delete(source);
+		}
+	}
+}
+
+/**
+ * @param {NetworkData} data
+ * @param {WriteNetworkFileOptions} [options]
+ * @returns {Promise<NetworkFileMetadata>}
+ */
+export function writeNetworkFile(data, options) {
+	const source = resolveDataFilePath();
+	return withFileWriteLock(source, () => writeNetworkFileUnlocked(data, source, options));
 }
 
 /**
@@ -243,4 +331,88 @@ export async function getWritableState() {
  */
 export async function checkWritableState() {
 	return (await getWritableState()).writable;
+}
+
+/**
+ * Reads configured network data, creating a valid blank dataset only when the
+ * file is missing/blank and the deployment has confirmed writable storage.
+ *
+ * @returns {Promise<NetworkFileBootstrapResult>}
+ */
+async function initializeNetworkFile() {
+	const state = await readNetworkFileState();
+	if (state.status === 'ready') {
+		return {
+			data: state.data,
+			source: state.source,
+			updatedAt: state.updatedAt,
+			initialized: false
+		};
+	}
+
+	const writableState = await getWritableState();
+	if (!writableState.writable) {
+		const suffix = writableState.reason ? ` ${writableState.reason}` : '';
+		throw new Error(`Network data file "${state.source}" is ${state.status}.${suffix}`);
+	}
+
+	const data = {
+		machines: [...EMPTY_NETWORK_DATA.machines],
+		devices: [...EMPTY_NETWORK_DATA.devices]
+	};
+	let metadata;
+	try {
+		metadata = await withFileWriteLock(state.source, () =>
+			writeNetworkFileUnlocked(data, state.source, {
+				createBackup: false,
+				beforeCommit: async () => {
+					const currentState = await readNetworkFileState();
+					if (currentState.status === 'ready') {
+						throw new InitializationSupersededError();
+					}
+				}
+			})
+		);
+	} catch (error) {
+		if (!(error instanceof InitializationSupersededError)) {
+			throw error;
+		}
+		const currentState = await readNetworkFileState();
+		if (currentState.status !== 'ready') {
+			throw new Error(`Network data file "${currentState.source}" is ${currentState.status}.`);
+		}
+		return {
+			data: currentState.data,
+			source: currentState.source,
+			updatedAt: currentState.updatedAt,
+			initialized: false
+		};
+	}
+	return {
+		data,
+		source: metadata.source,
+		updatedAt: metadata.updatedAt,
+		initialized: true
+	};
+}
+
+/**
+ * @returns {Promise<NetworkFileBootstrapResult>}
+ */
+export function readOrInitializeNetworkFile() {
+	const source = resolveDataFilePath();
+	const existingFlight = initializationFlights.get(source);
+	if (existingFlight) {
+		return existingFlight;
+	}
+
+	const flight = initializeNetworkFile();
+	initializationFlights.set(source, flight);
+	const clearFlight = () => {
+		if (initializationFlights.get(source) === flight) {
+			initializationFlights.delete(source);
+		}
+	};
+	flight.then(clearFlight, clearFlight);
+	return flight;
 }
